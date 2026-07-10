@@ -160,7 +160,11 @@ export class MonopolyEngine implements GameEngine {
       const isLandingOnGo = newPosition === 0;
       const goSalary = (game.settings.doubleMoneyOnGo && isLandingOnGo) ? GO_DOUBLE_SALARY : GO_SALARY;
       updatedPlayer = addMoney(updatedPlayer, goSalary);
-      newLogs.push(createLogEntry('collect', playerId, `${player.name} passed GO and collected $${goSalary}.`, { amount: goSalary }));
+      if (isLandingOnGo) {
+        newLogs.push(createLogEntry('collect', playerId, `${player.name} landed on GO and collected $${goSalary}.`, { amount: goSalary }));
+      } else {
+        newLogs.push(createLogEntry('collect', playerId, `${player.name} passed GO and collected $${goSalary}.`, { amount: goSalary }));
+      }
     }
 
     // Always update the board position, even when passing GO.
@@ -656,7 +660,9 @@ export class MonopolyEngine implements GameEngine {
     const { newPosition, passedGo } = this.board.calculateMovement(player.position, roll.total);
     let updatedPlayer = movePlayer(result.player, newPosition);
     if (passedGo) {
-      updatedPlayer = addMoney(updatedPlayer, GO_SALARY);
+      const isLandingOnGo = newPosition === 0;
+      const goSalary = isLandingOnGo && game.settings.doubleMoneyOnGo ? GO_DOUBLE_SALARY : GO_SALARY;
+      updatedPlayer = addMoney(updatedPlayer, goSalary);
     }
 
     // Keep the diceRoll so utility rent can be calculated on the landed tile,

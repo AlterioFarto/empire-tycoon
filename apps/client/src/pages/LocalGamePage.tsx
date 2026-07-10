@@ -75,8 +75,8 @@ export function LocalGamePage() {
     navigate('/', { replace: true });
   }
 
-  function handleTileClick(_tileId: string, tileIndex: number) {
-    openModal('property-detail', { tileIndex });
+  function handleTileClick(tileId: string, _tileIndex: number) {
+    openModal('property-detail', { tileId });
   }
 
   return (

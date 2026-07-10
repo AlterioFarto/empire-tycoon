@@ -507,7 +507,10 @@ const colorBarStyle: React.CSSProperties =
                 </motion.div>
               ) : (
                 housesCount > 0 && (
-                  <div className="flex gap-0.5 justify-center items-center">
+                  <div
+                    className="flex gap-0.5 justify-center items-center"
+                    style={{ transform: `rotate(${textRotation}deg)` }}
+                  >
                     {Array.from({ length: housesCount }).map((_, hIdx) => (
                       <motion.div key={hIdx} initial={{ scale: 0 }} animate={{ scale: 1 }} className="text-green-100">
                         <svg className="w-2.5 h-2.5 drop-shadow text-green-600 fill-current" viewBox="0 0 24 24">

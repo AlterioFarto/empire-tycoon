@@ -251,15 +251,23 @@ export const useLocalGameStore = create<LocalGameStore>((set, get) => ({
         const landedPlayer = resolved.players.find(p => p.id === playerId);
 
         setTimeout(() => {
-          // Passing GO always shows the collected-salary popup first.
           if (passedGo) {
             const goLog = resolved.logs.find(l => l.type === 'collect' && l.data?.amount);
             const goAmount = goLog ? Number((goLog.data as Record<string, unknown>).amount as number) : (resolved.settings.doubleMoneyOnGo ? 400 : 200);
-            get().openModal('info', {
-              title: 'Passed GO',
-              message: `You collected $${goAmount} for passing GO!`,
-              accent: 'go',
-            });
+            const isLandingOnGo = endPos === 0;
+            if (isLandingOnGo) {
+              get().openModal('info', {
+                title: 'Landed on GO',
+                message: `You landed on GO and collected $${goAmount}!`,
+                accent: 'go',
+              });
+            } else {
+              get().openModal('info', {
+                title: 'Passed GO',
+                message: `You passed GO and collected $${goAmount}!`,
+                accent: 'go',
+              });
+            }
             return;
           }
 
@@ -290,9 +298,9 @@ export const useLocalGameStore = create<LocalGameStore>((set, get) => ({
               }
             }
           }
-        }, 300);
+        }, 400);
       }, 600);
-    }, 500);
+    }, 600);
   },
 
   handleTileLanding: () => {
