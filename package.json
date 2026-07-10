@@ -1,0 +1,27 @@
+{
+  "name": "monopoly",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Online multiplayer Monopoly game",
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter @monopoly/server dev\" \"pnpm --filter @monopoly/client dev\"",
+    "build": "pnpm --filter @monopoly/shared build && pnpm --filter @monopoly/game-engine build && pnpm --filter @monopoly/config build && pnpm --filter @monopoly/server build && pnpm --filter @monopoly/client build",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,json,css,md}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.0.0"
+}
