@@ -52,11 +52,32 @@ export function PropertyDetailModal() {
 
   const isCurrentPlayerOwner =
     owner && currentPlayer && owner.id === currentPlayer.id;
+
+  // Whether the current player owns the full color set (required to build).
+  const isProperty = tile.type === 'property';
+  const groupProps = isProperty
+    ? (game.tiles.filter(
+        (t) => t.type === 'property' && (t as PropertyTile).color === (tile as PropertyTile).color,
+      ) as PropertyTile[])
+    : [];
+  const ownsFullSet = isProperty && currentPlayer
+    ? groupProps.every((p) => p.ownerId === currentPlayer.id)
+    : false;
+
   const canBuy =
     !owner &&
     currentPlayer &&
     currentTurn?.phase === 'deciding-buy' &&
     currentPlayer.money >= getPrice(tile);
+
+  // Build is only allowed when the full color set is owned (and not maxed/mortgaged).
+  const propTile = tile as PropertyTile;
+  const canBuildSet =
+    isCurrentPlayerOwner &&
+    ownsFullSet &&
+    !propTile.isMortgaged &&
+    !propTile.isHotel &&
+    propTile.houses < 4;
 
   return (
     <Modal isOpen={isOpen} onClose={closeModal} title={tile.name} size="md">
@@ -167,7 +188,12 @@ export function PropertyDetailModal() {
                 buildHouse(tile.id);
                 closeModal();
               }}
-              disabled={!(tile as PropertyTile).isHotel && (tile as PropertyTile).houses >= 4}
+              disabled={!canBuildSet}
+              title={
+                !ownsFullSet
+                  ? 'You must own the full color set to build'
+                  : 'Build a house'
+              }
             >
               Build House
             </button>

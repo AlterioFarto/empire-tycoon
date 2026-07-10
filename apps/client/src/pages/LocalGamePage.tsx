@@ -6,6 +6,7 @@ import { PlayerList } from '../components/PlayerList.js';
 import { DiceRollDisplay } from '../components/DiceRoll.js';
 import { PropertyDetailModal } from '../components/PropertyDetailModal.js';
 import { CardModal } from '../components/CardModal.js';
+import { InfoPopup } from '../components/InfoPopup.js';
 import { GameLogModal } from '../components/GameLogModal.js';
 import { PropertyManager } from '../components/PropertyManager.js';
 import { TradePanel } from '../components/TradePanel.js';
@@ -292,6 +293,7 @@ export function LocalGamePage() {
       {/* Modals */}
       <PropertyDetailModal />
       <CardModal />
+      <InfoPopup />
       <GameLogModal />
       <PropertyManager />
       <TradePanel />

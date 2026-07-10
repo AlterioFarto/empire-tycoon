@@ -28,6 +28,15 @@ export function PropertyManager() {
   const currentPlayer = game.players.find((p) => p.id === currentTurn.playerId);
   if (!currentPlayer) return null;
 
+  // A house can only be built when the player owns the full color set (and not maxed/mortgaged).
+  const canBuildFor = (t: PropertyTile): boolean => {
+    const group = game.tiles.filter(
+      (x) => x.type === 'property' && (x as PropertyTile).color === t.color,
+    ) as PropertyTile[];
+    const fullSet = group.every((p) => p.ownerId === currentPlayer.id);
+    return fullSet && !t.isMortgaged && !t.isHotel && t.houses < 4;
+  };
+
   const ownedTiles = game.tiles.filter(
     (t) =>
       (t.type === 'property' || t.type === 'railroad' || t.type === 'utility') &&
@@ -97,6 +106,7 @@ export function PropertyManager() {
                 <PropertyRow
                   key={tile.id}
                   tile={tile}
+                  canBuild={canBuildFor(tile)}
                   onBuild={() => {
                     buildHouse(tile.id);
                   }}
@@ -136,12 +146,14 @@ export function PropertyManager() {
 
 function PropertyRow({
   tile,
+  canBuild,
   onBuild,
   onSell,
   onMortgage,
   onUnmortgage,
 }: {
   tile: PropertyTile | RailroadTile | UtilityTile;
+  canBuild?: boolean;
   onBuild: () => void;
   onSell: () => void;
   onMortgage: () => void;
@@ -189,8 +201,8 @@ function PropertyRow({
           <button
             className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded transition disabled:opacity-30"
             onClick={onBuild}
-            disabled={prop.isHotel || prop.houses >= 4}
-            title="Build house"
+            disabled={!canBuild}
+            title={canBuild ? 'Build house' : 'You must own the full color set to build'}
           >
             +Build
           </button>

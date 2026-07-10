@@ -10,7 +10,7 @@ interface LocalPlayerSetup {
   color: PlayerColor;
 }
 
-type ModalType = 'property-detail' | 'card' | 'game-log' | 'manage-properties' | 'trade' | 'settings' | null;
+type ModalType = 'property-detail' | 'card' | 'game-log' | 'manage-properties' | 'trade' | 'settings' | 'info' | null;
 
 interface AnimationState {
   isRolling: boolean;
@@ -230,16 +230,51 @@ export const useLocalGameStore = create<LocalGameStore>((set, get) => ({
           lastDrawnCard: drawnCard,
         });
 
-        // Auto-show property detail when landing on any property
+        // Decide what to show after landing.
+        const passedGo = endPos < startPos || startPos + roll.total >= 40;
         const landedPlayer = resolved.players.find(p => p.id === playerId);
-        if (landedPlayer) {
-          const landedTile = resolved.tiles[landedPlayer.position];
-          if (landedTile && (landedTile.type === 'property' || landedTile.type === 'railroad' || landedTile.type === 'utility')) {
-            setTimeout(() => {
-              get().openModal('property-detail', { tileId: landedTile.id, tileIndex: landedTile.tileIndex });
-            }, 300);
+
+        setTimeout(() => {
+          // Passing GO always shows the collected-salary popup first.
+          if (passedGo) {
+            const goLog = resolved.logs.find(l => l.type === 'collect' && l.data?.amount);
+            const goAmount = goLog ? Number((goLog.data as Record<string, unknown>).amount as number) : (resolved.settings.doubleMoneyOnGo ? 400 : 200);
+            get().openModal('info', {
+              title: 'Passed GO',
+              message: `You collected $${goAmount} for passing GO!`,
+              accent: 'go',
+            });
+            return;
           }
-        }
+
+          if (landedPlayer) {
+            const landedTile = resolved.tiles[landedPlayer.position];
+            const isOwnable = landedTile &&
+              (landedTile.type === 'property' || landedTile.type === 'railroad' || landedTile.type === 'utility');
+            if (isOwnable) {
+              const ownerId = (landedTile as PropertyTile | RailroadTile | UtilityTile).ownerId;
+              if (ownerId != null) {
+                // Owned by someone -> show rent / own popup instead of the property card.
+                const owner = resolved.players.find(p => p.id === ownerId);
+                const isOwn = ownerId === playerId;
+                const payLog = resolved.logs[resolved.logs.length - 1];
+                const amount = payLog && payLog.type === 'pay'
+                  ? Number(((payLog.data as Record<string, unknown>)?.amount as number) ?? 0)
+                  : 0;
+                get().openModal('info', {
+                  title: isOwn ? 'Your Property' : 'Rent Paid',
+                  message: isOwn
+                    ? `You landed on ${landedTile.name}, which you already own.`
+                    : `You paid $${amount} rent to ${owner?.name ?? 'the owner'} for ${landedTile.name}.`,
+                  accent: isOwn ? 'own' : 'rent',
+                });
+              } else {
+                // Unowned -> show the property card (buy flow).
+                get().openModal('property-detail', { tileId: landedTile.id, tileIndex: landedTile.tileIndex });
+              }
+            }
+          }
+        }, 300);
       }, 600);
     }, 500);
   },
