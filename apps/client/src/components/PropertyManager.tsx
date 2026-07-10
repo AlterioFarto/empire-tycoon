@@ -28,13 +28,15 @@ export function PropertyManager() {
   const currentPlayer = game.players.find((p) => p.id === currentTurn.playerId);
   if (!currentPlayer) return null;
 
-  // A house can only be built when the player owns the full color set (and not maxed/mortgaged).
   const canBuildFor = (t: PropertyTile): boolean => {
     const group = game.tiles.filter(
       (x) => x.type === 'property' && (x as PropertyTile).color === t.color,
     ) as PropertyTile[];
     const fullSet = group.every((p) => p.ownerId === currentPlayer.id);
-    return fullSet && !t.isMortgaged && !t.isHotel && t.houses < 4;
+    if (!fullSet || t.isMortgaged || t.isHotel) return false;
+    if (t.houses === 4) return game.hotelsRemaining > 0;
+    if (t.houses < 4) return game.housesRemaining > 0;
+    return false;
   };
 
   const ownedTiles = game.tiles.filter(
@@ -183,10 +185,15 @@ function PropertyRow({
       {/* Name */}
       <span className="text-sm text-white flex-1 truncate">{tile.name}</span>
 
-      {/* Buildings indicator */}
       {isProperty && prop && (
-        <span className="text-xs text-gray-400 whitespace-nowrap">
-          {prop.isHotel ? '🏨' : prop.houses > 0 ? `🏠×${prop.houses}` : '—'}
+        <span className="text-xs text-gray-400 whitespace-nowrap flex items-center gap-1">
+          {prop.isHotel ? (
+            <span className="text-red-500 font-bold text-sm">HOTEL</span>
+          ) : prop.houses > 0 ? (
+            <span className="text-green-500">{'🏠'.repeat(prop.houses)}</span>
+          ) : (
+            <span>—</span>
+          )}
         </span>
       )}
 
@@ -202,9 +209,9 @@ function PropertyRow({
             className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded transition disabled:opacity-30"
             onClick={onBuild}
             disabled={!canBuild}
-            title={canBuild ? 'Build house' : 'You must own the full color set to build'}
+            title={canBuild ? (prop?.houses === 4 ? 'Build hotel' : 'Build house') : 'Must own full color group and have buildings available'}
           >
-            +Build
+            {prop?.houses === 4 ? '+Hotel' : '+Build'}
           </button>
           <button
             className="text-xs bg-yellow-600 hover:bg-yellow-700 text-white px-2 py-1 rounded transition disabled:opacity-30"

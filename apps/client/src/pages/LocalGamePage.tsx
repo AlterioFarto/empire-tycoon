@@ -23,6 +23,8 @@ export function LocalGamePage() {
 
   const rollDice = useLocalGameStore((s) => s.rollDice);
   const buyProperty = useLocalGameStore((s) => s.buyProperty);
+  const payTaxFlat = useLocalGameStore((s) => s.payTaxFlat);
+  const payTaxPercentage = useLocalGameStore((s) => s.payTaxPercentage);
   const passAuction = useLocalGameStore((s) => s.passAuction);
   const payJailFine = useLocalGameStore((s) => s.payJailFine);
   const useJailCard = useLocalGameStore((s) => s.useJailCard);
@@ -55,6 +57,7 @@ export function LocalGamePage() {
   const canRoll = currentPhase === 'waiting-to-roll' && !animation.isRolling && !animation.isMoving;
   const canEndTurn = currentPhase === 'optional-actions' || currentPhase === 'end-turn';
   const isDecidingBuy = currentPhase === 'deciding-buy';
+  const isDecidingTax = currentPhase === 'deciding-tax';
   const isJailOptions = currentPhase === 'jail-options';
   const gameOver = !!game.winnerId;
   const isAnimating = animation.isRolling || animation.isMoving;
@@ -217,6 +220,24 @@ export function LocalGamePage() {
               phase={currentPhase ?? ''}
             />
 
+            {/* Income Tax choice */}
+            {isDecidingTax && (
+              <>
+                <button
+                  className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm"
+                  onClick={payTaxFlat}
+                >
+                  Pay $200 Flat
+                </button>
+                <button
+                  className="bg-yellow-600 hover:bg-yellow-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm"
+                  onClick={payTaxPercentage}
+                >
+                  Pay 10% (${Math.floor((currentPlayer?.money ?? 0) * 0.1)})
+                </button>
+              </>
+            )}
+
             {/* Buy / Pass buttons */}
             {isDecidingBuy && (
               <>
@@ -270,12 +291,19 @@ export function LocalGamePage() {
             >
               🏠 Manage
             </button>
-            <button
-              className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition text-sm flex items-center gap-2"
-              onClick={() => openModal('trade')}
-            >
-              🔄 Trade
-            </button>
+            <div className="relative">
+              <button
+                className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition text-sm flex items-center gap-2"
+                onClick={() => openModal('trade')}
+              >
+                🔄 Trade
+              </button>
+              {game.tradeOffer && game.tradeOffer.toPlayerId === currentTurn?.playerId && (
+                <div className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-[10px] font-bold text-white animate-pulse shadow-lg">
+                  1
+                </div>
+              )}
+            </div>
 
             {/* End Turn */}
             {canEndTurn && (

@@ -497,10 +497,13 @@ const colorBarStyle: React.CSSProperties =
           {isProperty && !isMortgaged && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               {isHotel ? (
-                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="text-red-100 flex items-center">
-                  <svg className="w-3.5 h-3.5 drop-shadow-md text-red-500 fill-current" viewBox="0 0 24 24">
-                    <path d="M19 13V4H5v9H3v7h18v-7h-2zm-6 5h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V8h2v2z" />
-                  </svg>
+                <motion.div initial={{ scale: 0 }} animate={{ scale: 1.2 }} className="flex items-center">
+                  <div className="relative w-5 h-5 drop-shadow-lg" style={{ color: '#dc2626' }}>
+                    <svg className="w-full h-full text-red-600 fill-current" viewBox="0 0 24 24">
+                      <path d="M19 13V4H5v9H3v7h18v-7h-2zm-6 5h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V8h2v2z" />
+                    </svg>
+                    <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-ping" />
+                  </div>
                 </motion.div>
               ) : (
                 housesCount > 0 && (

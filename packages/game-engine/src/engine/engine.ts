@@ -52,6 +52,8 @@ export interface GameEngine {
   payRent(game: GameState, playerId: string): GameState;
   drawCard(game: GameState, playerId: string): { game: GameState; card: MonopolyCard };
   payTax(game: GameState, playerId: string): GameState;
+  payTaxFlat(game: GameState, playerId: string): GameState;
+  payTaxPercentage(game: GameState, playerId: string): GameState;
   goToJail(game: GameState, playerId: string): GameState;
   payJail(game: GameState, playerId: string): GameState;
   useGetOutOfJail(game: GameState, playerId: string): GameState;
@@ -70,7 +72,7 @@ export interface GameEngine {
   endTurn(game: GameState, playerId: string): GameState;
   getNextPlayer(game: GameState): GameState;
   declareWinner(game: GameState): GameState;
-  handleBankruptcy(game: GameState, playerId: string): GameState;
+  handleBankruptcy(game: GameState, playerId: string, creditorId?: string): GameState;
   getActivePlayer(game: GameState): Player | undefined;
 }
 
@@ -155,7 +157,8 @@ export class MonopolyEngine implements GameEngine {
     const newLogs: GameLogEntry[] = [];
 
     if (passedGo) {
-      const goSalary = game.settings.doubleMoneyOnGo ? GO_DOUBLE_SALARY : GO_SALARY;
+      const isLandingOnGo = newPosition === 0;
+      const goSalary = (game.settings.doubleMoneyOnGo && isLandingOnGo) ? GO_DOUBLE_SALARY : GO_SALARY;
       updatedPlayer = addMoney(updatedPlayer, goSalary);
       newLogs.push(createLogEntry('collect', playerId, `${player.name} passed GO and collected $${goSalary}.`, { amount: goSalary }));
     }
@@ -213,8 +216,24 @@ export class MonopolyEngine implements GameEngine {
 
       case 'go':
       case 'jail':
-      case 'free-parking':
       default:
+        turn = setPhase(turn, 'optional-actions');
+        return { ...game, currentTurn: turn };
+
+      case 'free-parking':
+        if (game.settings.freeParkingJackpot && game.freeParkingMoney > 0) {
+          const jackpot = game.freeParkingMoney;
+          let updatedPlayer = addMoney(player, jackpot);
+          const log = createLogEntry('collect', playerId, `${player.name} landed on Free Parking and collected $${jackpot} jackpot!`, { amount: jackpot });
+          turn = setPhase(turn, 'optional-actions');
+          return {
+            ...game,
+            players: updatePlayerInState(game.players, updatedPlayer),
+            freeParkingMoney: 0,
+            currentTurn: turn,
+            logs: [...game.logs, log],
+          };
+        }
         turn = setPhase(turn, 'optional-actions');
         return { ...game, currentTurn: turn };
     }
@@ -333,14 +352,24 @@ export class MonopolyEngine implements GameEngine {
       return this.handleTileLanding(game, playerId);
     }
 
-    let updatedPlayer = deductMoney(player, rent);
-    let updatedOwner = addMoney(owner, rent);
+    let actualPaid = Math.min(rent, player.money);
+    let updatedPlayer = deductMoney(player, actualPaid);
+    let updatedOwner = addMoney(owner, actualPaid);
 
-    if (updatedPlayer.money < 0) {
-      updatedPlayer = { ...updatedPlayer, money: 0 };
+    const log = createLogEntry('pay', playerId, `${player.name} paid $${actualPaid} rent to ${owner.name}.${actualPaid < rent ? ` Still owes $${rent - actualPaid}.` : ''}`, { amount: actualPaid, ownerId: owner.id });
+
+    if (actualPaid < rent) {
+      let gameAfterDebt: GameState = {
+        ...game,
+        players: updatePlayerInState(
+          updatePlayerInState(game.players, updatedPlayer),
+          updatedOwner,
+        ),
+        currentTurn: game.currentTurn,
+        logs: [...game.logs, log],
+      };
+      return this.handleBankruptcy(gameAfterDebt, playerId, owner.id);
     }
-
-    const log = createLogEntry('pay', playerId, `${player.name} paid $${rent} rent to ${owner.name}.`, { amount: rent, ownerId: owner.id });
 
     let turn = setPhase(game.currentTurn, 'optional-actions');
 
@@ -457,15 +486,49 @@ export class MonopolyEngine implements GameEngine {
     if (tile.type !== 'tax') return game;
 
     const taxTile = tile as import('@monopoly/shared').TaxTile;
-    let taxAmount = taxTile.amount;
 
+    // Income Tax gives player a choice; Luxury Tax is auto-paid
     if (taxTile.percentage && taxTile.percentage > 0) {
-      const percentageAmount = Math.floor(player.money * (taxTile.percentage / 100));
-      taxAmount = Math.min(taxAmount, percentageAmount);
+      let turn = setPhase(game.currentTurn, 'deciding-tax');
+      return {
+        ...game,
+        currentTurn: turn,
+        logs: [...game.logs, createLogEntry('system', playerId, `${player.name} must choose Income Tax: $${taxTile.amount} or ${taxTile.percentage}%.`, {})],
+      };
     }
 
-    let updatedPlayer = deductMoney(player, taxAmount);
+    let updatedPlayer = deductMoney(player, taxTile.amount);
 
+    if (updatedPlayer.money < 0) {
+      updatedPlayer = { ...updatedPlayer, money: 0 };
+    }
+
+    let freeParkingMoney = game.freeParkingMoney;
+    if (game.settings.freeParkingJackpot) {
+      freeParkingMoney += taxTile.amount;
+    }
+
+    let turn = setPhase(game.currentTurn, 'optional-actions');
+
+    return {
+      ...game,
+      players: updatePlayerInState(game.players, updatedPlayer),
+      freeParkingMoney,
+      currentTurn: turn,
+      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${taxTile.amount} in taxes.`, { amount: taxTile.amount })],
+    };
+  }
+
+  payTaxFlat(game: GameState, playerId: string): GameState {
+    const player = game.players.find(p => p.id === playerId);
+    if (!player || !game.currentTurn) return game;
+
+    const tile = this.board.getTile(player.position);
+    if (tile.type !== 'tax') return game;
+
+    const taxTile = tile as import('@monopoly/shared').TaxTile;
+    const taxAmount = taxTile.amount;
+    let updatedPlayer = deductMoney(player, taxAmount);
     if (updatedPlayer.money < 0) {
       updatedPlayer = { ...updatedPlayer, money: 0 };
     }
@@ -482,7 +545,37 @@ export class MonopolyEngine implements GameEngine {
       players: updatePlayerInState(game.players, updatedPlayer),
       freeParkingMoney,
       currentTurn: turn,
-      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${taxAmount} in taxes.`, { amount: taxAmount })],
+      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${taxAmount} flat Income Tax.`, { amount: taxAmount })],
+    };
+  }
+
+  payTaxPercentage(game: GameState, playerId: string): GameState {
+    const player = game.players.find(p => p.id === playerId);
+    if (!player || !game.currentTurn) return game;
+
+    const tile = this.board.getTile(player.position);
+    if (tile.type !== 'tax') return game;
+
+    const taxTile = tile as import('@monopoly/shared').TaxTile;
+    const percentageAmount = Math.floor(player.money * ((taxTile.percentage ?? 10) / 100));
+    let updatedPlayer = deductMoney(player, percentageAmount);
+    if (updatedPlayer.money < 0) {
+      updatedPlayer = { ...updatedPlayer, money: 0 };
+    }
+
+    let freeParkingMoney = game.freeParkingMoney;
+    if (game.settings.freeParkingJackpot) {
+      freeParkingMoney += percentageAmount;
+    }
+
+    let turn = setPhase(game.currentTurn, 'optional-actions');
+
+    return {
+      ...game,
+      players: updatePlayerInState(game.players, updatedPlayer),
+      freeParkingMoney,
+      currentTurn: turn,
+      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${percentageAmount} (${taxTile.percentage}%) Income Tax.`, { amount: percentageAmount })],
     };
   }
 
@@ -491,16 +584,17 @@ export class MonopolyEngine implements GameEngine {
     if (!player || !game.currentTurn) return game;
 
     const jailedPlayer = sendToJail(player);
-    let turn = setPhase(game.currentTurn, 'jail-options');
 
-    const log = createLogEntry('jail', playerId, `${player.name} was sent to Jail.`, {});
+    const log = createLogEntry('jail', playerId, `${player.name} was sent to Jail and their turn ends.`, {});
 
-    return {
+    const gameWithJail: GameState = {
       ...game,
       players: updatePlayerInState(game.players, jailedPlayer),
-      currentTurn: turn,
       logs: [...game.logs, log],
     };
+
+    // End turn immediately — next player goes
+    return this.getNextPlayer(gameWithJail);
   }
 
   payJail(game: GameState, playerId: string): GameState {
@@ -961,25 +1055,32 @@ export class MonopolyEngine implements GameEngine {
     };
   }
 
-  handleBankruptcy(game: GameState, playerId: string): GameState {
+  handleBankruptcy(game: GameState, playerId: string, creditorId?: string): GameState {
     const player = game.players.find(p => p.id === playerId);
     if (!player) return game;
 
     let updatedPlayer = setBankrupt(player);
     let updatedTiles = [...game.tiles];
+    let updatedPlayers = updatePlayerInState(game.players, { ...updatedPlayer, money: 0, properties: [] });
 
-    // Transfer all properties to bank (or mortgage them)
+    // Transfer all properties to creditor (if rent debt) or back to bank
     for (const propId of player.properties) {
       const tileIdx = updatedTiles.findIndex(t => t.id === propId);
       if (tileIdx !== -1) {
         const tile = updatedTiles[tileIdx]!;
         if (tile.type === 'property' || tile.type === 'railroad' || tile.type === 'utility') {
-          updatedTiles[tileIdx] = { ...tile, ownerId: null, isMortgaged: false } as typeof tile;
+          if (creditorId) {
+            updatedTiles[tileIdx] = { ...tile, ownerId: creditorId, isMortgaged: tile.isMortgaged } as typeof tile;
+            const creditor = updatedPlayers.find(p => p.id === creditorId);
+            if (creditor) {
+              updatedPlayers = updatePlayerInState(updatedPlayers, addProperty(creditor, propId));
+            }
+          } else {
+            updatedTiles[tileIdx] = { ...tile, ownerId: null, isMortgaged: false } as typeof tile;
+          }
         }
       }
     }
-
-    const updatedPlayers = updatePlayerInState(game.players, { ...updatedPlayer, money: 0, properties: [] });
 
     const winner = hasPlayerWon({
       ...game,
@@ -994,7 +1095,7 @@ export class MonopolyEngine implements GameEngine {
         status: 'completed',
         endedAt: Date.now(),
         logs: [...game.logs,
-          createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!`, {}),
+          createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'}.` : ''}`, {}),
           createLogEntry('win', winner, `${updatedPlayers.find(p => p.id === winner)?.name ?? 'Player'} wins!`, {}),
         ],
       };
@@ -1004,7 +1105,7 @@ export class MonopolyEngine implements GameEngine {
       ...game,
       players: updatedPlayers,
       tiles: updatedTiles,
-      logs: [...game.logs, createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!`, {})],
+      logs: [...game.logs, createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'}.` : ''}`, {})],
     };
   }
 

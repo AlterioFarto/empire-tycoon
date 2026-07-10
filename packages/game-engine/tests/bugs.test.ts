@@ -128,13 +128,17 @@ describe('Bug 3 — Card movement triggers destination tile actions', () => {
     expect(game.currentTurn!.phase).toBe('deciding-buy'); // tile action processed
   });
 
-  it('Go Back 3 Spaces lands on a tax tile and charges tax', () => {
+  it('Go Back 3 Spaces lands on a tax tile and offers payment choice', () => {
     const card: MonopolyCard = { id: 'c3', type: 'chance', title: 'Go Back 3', description: '', action: 'go-back-3' };
     let game = onChanceTile(card);
     game = engine.handleTileLanding(game, 'p1');
     const alice = game.players.find(p => p.id === 'p1')!;
     expect(alice.position).toBe(4); // Income Tax
-    expect(alice.money).toBeLessThan(1500); // tax paid
+    expect(game.currentTurn!.phase).toBe('deciding-tax'); // choice offered
+    // Player chooses flat $200
+    game = engine.payTaxFlat(game, 'p1');
+    const aliceAfter = game.players.find(p => p.id === 'p1')!;
+    expect(aliceAfter.money).toBe(1300); // 1500 - 200
   });
 });
 

@@ -46,6 +46,8 @@ export const CLIENT_EVENTS: Record<ClientEvent, string> = {
   'lobby:update-settings': 'lobby:update-settings',
   'game:roll-dice': 'game:roll-dice',
   'game:buy-property': 'game:buy-property',
+  'game:pay-tax-flat': 'game:pay-tax-flat',
+  'game:pay-tax-percentage': 'game:pay-tax-percentage',
   'game:pass-auction': 'game:pass-auction',
   'game:auction-bid': 'game:auction-bid',
   'game:build-house': 'game:build-house',

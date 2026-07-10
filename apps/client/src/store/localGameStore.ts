@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { GameState, GameSettings, PlayerColor, DiceRoll, MonopolyCard, PropertyTile, RailroadTile, UtilityTile } from '@monopoly/shared';
-import { MonopolyEngine, setPhase } from '@monopoly/game-engine';
+import { MonopolyEngine } from '@monopoly/game-engine';
 
 const engine = new MonopolyEngine();
 
@@ -48,6 +48,8 @@ interface LocalGameStore {
   // Actions (passthrough to engine)
   rollDice: () => void;
   buyProperty: () => void;
+  payTaxFlat: () => void;
+  payTaxPercentage: () => void;
   passAuction: () => void;
   auctionBid: (amount: number) => void;
   buildHouse: (propertyId: string) => void;
@@ -151,6 +153,20 @@ export const useLocalGameStore = create<LocalGameStore>((set, get) => ({
   },
 
   // ── Game actions ──
+
+  payTaxFlat: () => {
+    const state = get();
+    if (!state.game?.currentTurn) return;
+    const game = engine.payTaxFlat(state.game, state.game.currentTurn.playerId);
+    set({ game });
+  },
+
+  payTaxPercentage: () => {
+    const state = get();
+    if (!state.game?.currentTurn) return;
+    const game = engine.payTaxPercentage(state.game, state.game.currentTurn.playerId);
+    set({ game });
+  },
 
   rollDice: () => {
     const state = get();

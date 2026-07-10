@@ -88,9 +88,60 @@ export function TradePanel() {
       {pendingTrade && pendingTrade.toPlayerId === currentPlayer?.id && (
         <div className="mb-4 p-3 bg-yellow-900/20 border border-yellow-700/50 rounded-lg">
           <div className="text-sm text-yellow-400 font-semibold mb-2">Incoming Trade Offer</div>
-          <div className="text-xs text-gray-300 mb-3">
+          <div className="text-xs text-gray-300 mb-2">
             From: {game.players.find((p) => p.id === pendingTrade.fromPlayerId)?.name}
           </div>
+
+          {/* Full trade details */}
+          <div className="grid grid-cols-2 gap-2 mb-3 bg-gray-900/40 rounded p-2">
+            <div>
+              <div className="text-[10px] text-green-400 font-semibold uppercase mb-1">They Offer</div>
+              {pendingTrade.offerProperties.length > 0 ? (
+                <div className="space-y-0.5">
+                  {pendingTrade.offerProperties.map((pid) => {
+                    const t = game.tiles.find(t => t.id === pid);
+                    return (
+                      <div key={pid} className="flex items-center gap-1 text-[11px] text-gray-200">
+                        {t?.type === 'property' && (
+                          <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: COLOR_MAP[(t as PropertyTile).color] ?? '#666' }} />
+                        )}
+                        {t?.name ?? pid}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-[11px] text-gray-500 italic">No properties</div>
+              )}
+              {pendingTrade.offerMoney > 0 && (
+                <div className="text-[11px] text-green-300 font-mono mt-1">+ ${pendingTrade.offerMoney}</div>
+              )}
+            </div>
+            <div>
+              <div className="text-[10px] text-yellow-400 font-semibold uppercase mb-1">They Request</div>
+              {pendingTrade.requestProperties.length > 0 ? (
+                <div className="space-y-0.5">
+                  {pendingTrade.requestProperties.map((pid) => {
+                    const t = game.tiles.find(t => t.id === pid);
+                    return (
+                      <div key={pid} className="flex items-center gap-1 text-[11px] text-gray-200">
+                        {t?.type === 'property' && (
+                          <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: COLOR_MAP[(t as PropertyTile).color] ?? '#666' }} />
+                        )}
+                        {t?.name ?? pid}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-[11px] text-gray-500 italic">No properties</div>
+              )}
+              {pendingTrade.requestMoney > 0 && (
+                <div className="text-[11px] text-yellow-300 font-mono mt-1">+ ${pendingTrade.requestMoney}</div>
+              )}
+            </div>
+          </div>
+
           <div className="flex gap-2">
             <button
               className="bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-1.5 px-4 rounded-lg transition"

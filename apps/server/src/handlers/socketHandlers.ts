@@ -103,6 +103,24 @@ export function registerSocketHandlers(io: SocketIOServer): void {
 
     // ── Game Events ──
 
+    socket.on('game:pay-tax-flat', () => {
+      processGameAction(socket, io, (game) => {
+        const updated = engine.payTaxFlat(game, socket.id);
+        GameManager.setGame(currentGameId!, updated);
+        io.to(currentLobbyId!).emit('game:state-update', { game: updated });
+        return updated;
+      });
+    });
+
+    socket.on('game:pay-tax-percentage', () => {
+      processGameAction(socket, io, (game) => {
+        const updated = engine.payTaxPercentage(game, socket.id);
+        GameManager.setGame(currentGameId!, updated);
+        io.to(currentLobbyId!).emit('game:state-update', { game: updated });
+        return updated;
+      });
+    });
+
     socket.on('game:roll-dice', () => {
       processGameAction(socket, io, (game) => {
         const result = engine.rollDice(game, socket.id);

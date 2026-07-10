@@ -220,6 +220,7 @@ export type TurnPhase =
   | 'moving'
   | 'resolving-tile'
   | 'deciding-buy'
+  | 'deciding-tax'
   | 'auction'
   | 'optional-actions'
   | 'rolling-for-jail'
@@ -372,6 +373,8 @@ export interface ClientEventPayloads {
   'lobby:update-settings': { settings: Partial<GameSettings> };
   'game:roll-dice': {};
   'game:buy-property': {};
+  'game:pay-tax-flat': {};
+  'game:pay-tax-percentage': {};
   'game:pass-auction': {};
   'game:auction-bid': { amount: number };
   'game:build-house': { propertyId: string };

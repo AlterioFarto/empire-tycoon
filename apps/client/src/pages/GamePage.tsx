@@ -48,6 +48,7 @@ export function GamePage() {
   const currentPhase = gameCurrentTurn?.phase;
   const canRoll = isMyTurn && currentPhase === 'waiting-to-roll';
   const canEndTurn = isMyTurn && (currentPhase === 'optional-actions' || currentPhase === 'end-turn');
+  const isDecidingTax = isMyTurn && currentPhase === 'deciding-tax';
 
   function handleRollDice() {
     emitEvent('game:roll-dice', {});
@@ -114,6 +115,23 @@ export function GamePage() {
               canRoll={canRoll}
               phase={game.currentTurn?.phase ?? ''}
             />
+
+            {isDecidingTax && (
+              <>
+                <button
+                  className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm"
+                  onClick={() => emitEvent('game:pay-tax-flat', {})}
+                >
+                  Pay $200 Flat
+                </button>
+                <button
+                  className="bg-yellow-600 hover:bg-yellow-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm"
+                  onClick={() => emitEvent('game:pay-tax-percentage', {})}
+                >
+                  Pay 10% (${Math.floor((currentPlayer?.money ?? 0) * 0.1)})
+                </button>
+              </>
+            )}
 
             {isMyTurn && game.currentTurn?.phase === 'deciding-buy' && (
               <>
@@ -185,6 +203,16 @@ export function GamePage() {
           <div className="bg-gray-800 rounded-lg p-4">
             <Chat />
           </div>
+
+          {/* Pending trade notification */}
+          {game.tradeOffer && game.tradeOffer.toPlayerId === playerId && (
+            <div className="bg-gray-800 rounded-lg p-4 border border-yellow-700/50">
+              <div className="flex items-center gap-2 text-yellow-400 text-sm font-semibold">
+                <span className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
+                Incoming Trade Offer!
+              </div>
+            </div>
+          )}
 
           {/* Game log */}
           <div className="bg-gray-800 rounded-lg p-4">
