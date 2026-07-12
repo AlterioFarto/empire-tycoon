@@ -12,7 +12,6 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     console.log(`Player connected: ${socket.id}`);
 
     let currentLobbyId: string | null = null;
-    let currentGameId: string | null = null;
 
     // ── Lobby Events ──
 
@@ -96,7 +95,6 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         GameManager.registerPlayer(player.id, gameId);
       }
 
-      currentGameId = gameId;
       io.to(currentLobbyId).emit('game:started', { game });
       io.to(currentLobbyId).emit('lobby:updated', { lobby: lobby.getLobby() });
     });
@@ -106,7 +104,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:pay-tax-flat', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.payTaxFlat(game, socket.id);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -115,7 +113,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:pay-tax-percentage', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.payTaxPercentage(game, socket.id);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -124,7 +122,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:roll-dice', () => {
       processGameAction(socket, io, (game) => {
         const result = engine.rollDice(game, socket.id);
-        GameManager.setGame(currentGameId!, result.game);
+        GameManager.setGame(game.id, result.game);
 
         const newGame = result.game;
         io.to(currentLobbyId!).emit('game:dice-roll', { playerId: socket.id, roll: result.roll });
@@ -134,7 +132,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         const currentPlayer = newGame.players.find(p => p.id === socket.id);
         if (currentPlayer && !currentPlayer.inJail) {
           const resolvedGame = engine.handleTileLanding(newGame, socket.id);
-          GameManager.setGame(currentGameId!, resolvedGame);
+          GameManager.setGame(game.id, resolvedGame);
           io.to(currentLobbyId!).emit('game:state-update', { game: resolvedGame });
         }
 
@@ -145,7 +143,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:buy-property', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.buyProperty(game, socket.id);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:property-bought', { playerId: socket.id, propertyId: '' });
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
@@ -155,7 +153,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:pass-auction', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.passAuction(game, socket.id);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -164,7 +162,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:auction-bid', (data: { amount: number }) => {
       processGameAction(socket, io, (game) => {
         const updated = engine.placeAuctionBid(game, socket.id, data.amount);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:auction-bid', { playerId: socket.id, amount: data.amount });
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
@@ -174,7 +172,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:build-house', (data: { propertyId: string }) => {
       processGameAction(socket, io, (game) => {
         const updated = engine.buildHouse(game, socket.id, data.propertyId);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -183,7 +181,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:sell-house', (data: { propertyId: string }) => {
       processGameAction(socket, io, (game) => {
         const updated = engine.sellHouse(game, socket.id, data.propertyId);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -192,7 +190,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:mortgage', (data: { propertyId: string }) => {
       processGameAction(socket, io, (game) => {
         const updated = engine.mortgage(game, socket.id, data.propertyId);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -201,7 +199,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:unmortgage', (data: { propertyId: string }) => {
       processGameAction(socket, io, (game) => {
         const updated = engine.unmortgage(game, socket.id, data.propertyId);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -210,7 +208,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:use-jail-card', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.useGetOutOfJail(game, socket.id);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:jail-update', { playerId: socket.id, inJail: false });
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
@@ -220,7 +218,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:pay-jail-fine', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.payJail(game, socket.id);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:jail-update', { playerId: socket.id, inJail: false });
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
@@ -230,7 +228,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:roll-for-jail', () => {
       processGameAction(socket, io, (game) => {
         const result = engine.rollForJail(game, socket.id);
-        GameManager.setGame(currentGameId!, result.game);
+        GameManager.setGame(game.id, result.game);
         io.to(currentLobbyId!).emit('game:dice-roll', { playerId: socket.id, roll: result.roll });
         io.to(currentLobbyId!).emit('game:state-update', { game: result.game });
         return result.game;
@@ -240,7 +238,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:end-turn', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.endTurn(game, socket.id);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:turn-change', {
           playerId: updated.currentTurn?.playerId ?? '',
           phase: updated.currentTurn?.phase ?? 'waiting-to-roll',
@@ -258,7 +256,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
       processGameAction(socket, io, (game) => {
         const { fromPlayerId, toPlayerId, offerProperties, offerMoney, requestProperties, requestMoney } = data.offer;
         const updated = engine.createTrade(game, fromPlayerId, toPlayerId, offerProperties, offerMoney, requestProperties, requestMoney);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:trade-offer', { offer: updated.tradeOffer! });
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
@@ -268,7 +266,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:trade-accept', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.acceptTrade(game);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:trade-update', { offer: updated.tradeOffer! });
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
@@ -278,7 +276,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
     socket.on('game:trade-reject', () => {
       processGameAction(socket, io, (game) => {
         const updated = engine.rejectTrade(game);
-        GameManager.setGame(currentGameId!, updated);
+        GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -299,7 +297,6 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         socket.emit('error', { message: 'Game not found', code: 'GAME_NOT_FOUND' });
         return;
       }
-      currentGameId = data.gameId;
       socket.emit('game:state-update', { game });
     });
 
@@ -317,7 +314,6 @@ export function registerSocketHandlers(io: SocketIOServer): void {
       }
 
       currentLobbyId = null;
-      currentGameId = null;
     });
   });
 }
