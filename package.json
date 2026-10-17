@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently \"pnpm --filter @monopoly/server dev\" \"pnpm --filter @monopoly/client dev\"",
     "build": "pnpm --filter @monopoly/shared build && pnpm --filter @monopoly/game-engine build && pnpm --filter @monopoly/config build && pnpm --filter @monopoly/server build && pnpm --filter @monopoly/client build",
+    "setup": "pnpm install && pnpm run build",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx,json,css,md}\"",
     "test": "vitest run",
