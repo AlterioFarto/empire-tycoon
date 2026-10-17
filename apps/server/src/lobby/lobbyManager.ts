@@ -4,6 +4,9 @@ import { v4 as uuid } from 'uuid';
 
 const ACTIVE_LOBBIES = new Map<string, LobbyManager>();
 const CODE_TO_LOBBY = new Map<string, string>();
+const LOBBY_CREATED_AT = new Map<string, number>();
+
+const LOBBY_TTL_MS = 60 * 60 * 1000;
 
 function generateCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -39,7 +42,24 @@ export class LobbyManager {
     const manager = new LobbyManager(hostId, settings);
     ACTIVE_LOBBIES.set(manager.getId(), manager);
     CODE_TO_LOBBY.set(manager.getCode(), manager.getId());
+    LOBBY_CREATED_AT.set(manager.getId(), Date.now());
     return manager;
+  }
+
+  static cleanupExpiredLobbies(): void {
+    const now = Date.now();
+    for (const [lobbyId, createdAt] of LOBBY_CREATED_AT) {
+      const manager = ACTIVE_LOBBIES.get(lobbyId);
+      if (!manager) {
+        LOBBY_CREATED_AT.delete(lobbyId);
+        continue;
+      }
+      const abandoned = manager.getPlayers().every(p => !p.connected);
+      if (abandoned && now - createdAt > LOBBY_TTL_MS) {
+        manager.removeAll();
+        LOBBY_CREATED_AT.delete(lobbyId);
+      }
+    }
   }
 
   static getByCode(code: string): LobbyManager | undefined {
@@ -52,12 +72,26 @@ export class LobbyManager {
     return ACTIVE_LOBBIES.get(id);
   }
 
+  static getByPlayerId(playerId: string): LobbyManager | undefined {
+    for (const manager of ACTIVE_LOBBIES.values()) {
+      if (manager.lobby.players.some(p => p.id === playerId)) return manager;
+    }
+    return undefined;
+  }
+
   static remove(id: string): void {
     const manager = ACTIVE_LOBBIES.get(id);
     if (manager) {
-      CODE_TO_LOBBY.delete(manager.getCode());
-      ACTIVE_LOBBIES.delete(id);
+      manager.removeAll();
     }
+    CODE_TO_LOBBY.delete(manager?.getCode() ?? id);
+    ACTIVE_LOBBIES.delete(id);
+    LOBBY_CREATED_AT.delete(id);
+  }
+
+  removeAll(): void {
+    this.lobby.players = [];
+    this.lobby.status = 'closed';
   }
 
   getId(): string {
@@ -84,16 +118,30 @@ export class LobbyManager {
     return this.lobby.hostId === playerId;
   }
 
+  hasPlayer(playerId: string): boolean {
+    return this.lobby.players.some(p => p.id === playerId);
+  }
+
+  tryReconnectPlayer(playerId: string): boolean {
+    const player = this.lobby.players.find(p => p.id === playerId);
+    if (!player) return false;
+    player.connected = true;
+    return true;
+  }
+
   addPlayer(playerId: string, name: string, color: PlayerColor): boolean {
     if (this.lobby.status !== 'open') return false;
     if (this.lobby.players.length >= this.lobby.settings.maxPlayers) return false;
+    if (this.lobby.players.some(p => p.id === playerId)) return false;
+    const trimmedName = name.trim();
+    if (!trimmedName || trimmedName.length > 16) return false;
 
     const colorTaken = this.lobby.players.some(p => p.color === color);
     if (colorTaken) return false;
 
     const player: Player = {
       id: playerId,
-      name,
+      name: trimmedName,
       color,
       money: this.lobby.settings.startingCash,
       position: 0,
@@ -115,9 +163,12 @@ export class LobbyManager {
   removePlayer(playerId: string): void {
     this.lobby.players = this.lobby.players.filter(p => p.id !== playerId);
     if (this.lobby.players.length > 0 && this.lobby.hostId === playerId) {
-      this.lobby.hostId = this.lobby.players[0]!.id;
-      this.lobby.players[0]!.isHost = true;
+      const nextHost = this.lobby.players.find(p => p.connected) ?? this.lobby.players[0]!;
+      this.lobby.hostId = nextHost.id;
+      this.lobby.players.forEach(p => { p.isHost = p.id === nextHost.id; });
     }
+    // Keep turnOrder contiguous and stable
+    this.lobby.players.forEach((p, i) => { p.turnOrder = i; });
     if (this.lobby.players.length === 0) {
       LobbyManager.remove(this.lobby.id);
     }

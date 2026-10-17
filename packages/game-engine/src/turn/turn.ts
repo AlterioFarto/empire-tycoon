@@ -57,12 +57,6 @@ export function canEndTurn(turn: TurnState): boolean {
   return turn.phase === 'optional-actions' || turn.phase === 'end-turn';
 }
 
-export function shouldEndTurnAfterRoll(turn: TurnState): boolean {
-  if (!turn.diceRoll) return true;
-  if (turn.diceRoll.isDoubles && turn.doublesCount < 3) return false;
-  return true;
-}
-
 export function hasThirdDouble(turn: TurnState): boolean {
   return turn.doublesCount >= 3;
 }

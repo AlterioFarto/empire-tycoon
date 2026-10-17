@@ -137,7 +137,7 @@ export class MonopolyEngine implements GameEngine {
 
   rollDice(game: GameState, playerId: string): { game: GameState; roll: DiceRoll } {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) {
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId || game.currentTurn.phase !== 'waiting-to-roll' || player.inJail) {
       return { game, roll: { die1: 0, die2: 0, isDoubles: false, total: 0 } };
     }
 
@@ -152,7 +152,7 @@ export class MonopolyEngine implements GameEngine {
       return { game: updatedGame, roll };
     }
 
-    const { newPosition, passedGo } = this.board.calculateMovement(player.position, roll.total);
+    const { newPosition, passedGo } = this.board.calculateMovement(player.position, turn.movesRemaining);
     let updatedPlayer = player;
     const newLogs: GameLogEntry[] = [];
 
@@ -307,7 +307,7 @@ export class MonopolyEngine implements GameEngine {
     return this.startAuction(game, tile.id);
   }
 
-  payRent(game: GameState, playerId: string): GameState {
+    payRent(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
     if (!player || !game.currentTurn) return game;
 
@@ -353,7 +353,8 @@ export class MonopolyEngine implements GameEngine {
     }
 
     if (rent <= 0) {
-      return this.handleTileLanding(game, playerId);
+      const turn = setPhase(game.currentTurn, 'optional-actions');
+      return { ...game, currentTurn: turn };
     }
 
     let actualPaid = Math.min(rent, player.money);
@@ -504,12 +505,16 @@ export class MonopolyEngine implements GameEngine {
     let updatedPlayer = deductMoney(player, taxTile.amount);
 
     if (updatedPlayer.money < 0) {
+      if (updatedPlayer.money < -taxTile.amount) {
+        return game; // Cannot afford tax
+      }
       updatedPlayer = { ...updatedPlayer, money: 0 };
     }
 
+    const actuallyPaid = taxTile.amount;
     let freeParkingMoney = game.freeParkingMoney;
     if (game.settings.freeParkingJackpot) {
-      freeParkingMoney += taxTile.amount;
+      freeParkingMoney += actuallyPaid;
     }
 
     let turn = setPhase(game.currentTurn, 'optional-actions');
@@ -519,7 +524,7 @@ export class MonopolyEngine implements GameEngine {
       players: updatePlayerInState(game.players, updatedPlayer),
       freeParkingMoney,
       currentTurn: turn,
-      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${taxTile.amount} in taxes.`, { amount: taxTile.amount })],
+      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${actuallyPaid} in taxes.`, { amount: actuallyPaid })],
     };
   }
 
@@ -532,10 +537,8 @@ export class MonopolyEngine implements GameEngine {
 
     const taxTile = tile as import('@monopoly/shared').TaxTile;
     const taxAmount = taxTile.amount;
+    if (player.money < taxAmount) return game;
     let updatedPlayer = deductMoney(player, taxAmount);
-    if (updatedPlayer.money < 0) {
-      updatedPlayer = { ...updatedPlayer, money: 0 };
-    }
 
     let freeParkingMoney = game.freeParkingMoney;
     if (game.settings.freeParkingJackpot) {
@@ -562,10 +565,8 @@ export class MonopolyEngine implements GameEngine {
 
     const taxTile = tile as import('@monopoly/shared').TaxTile;
     const percentageAmount = Math.floor(player.money * ((taxTile.percentage ?? 10) / 100));
+    if (player.money < percentageAmount) return game;
     let updatedPlayer = deductMoney(player, percentageAmount);
-    if (updatedPlayer.money < 0) {
-      updatedPlayer = { ...updatedPlayer, money: 0 };
-    }
 
     let freeParkingMoney = game.freeParkingMoney;
     if (game.settings.freeParkingJackpot) {
@@ -604,6 +605,7 @@ export class MonopolyEngine implements GameEngine {
   payJail(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
     if (!player || !game.currentTurn) return game;
+    if (!player.inJail || game.currentTurn.phase !== 'jail-options' || player.money < JAIL_FINE) return game;
 
     const releasedPlayer = payJailFine(player);
     let turn = setPhase(game.currentTurn, 'waiting-to-roll');
@@ -619,6 +621,7 @@ export class MonopolyEngine implements GameEngine {
   useGetOutOfJail(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
     if (!player || player.getOutOfJailCards <= 0 || !game.currentTurn) return game;
+    if (!player.inJail || game.currentTurn.phase !== 'jail-options') return game;
 
     const releasedPlayer = useJailCard(player);
     let turn = setPhase(game.currentTurn, 'waiting-to-roll');
@@ -701,6 +704,7 @@ export class MonopolyEngine implements GameEngine {
 
     const check = canBuildOnProperty(property, player, groupProperties, game.housesRemaining, game.hotelsRemaining);
     if (!check.allowed) return game;
+    if (player.money < property.houseCost) return game;
 
     let updatedTiles = [...game.tiles];
     let updatedHousesRemaining = game.housesRemaining;
@@ -708,14 +712,14 @@ export class MonopolyEngine implements GameEngine {
     let updatedPlayer = deductMoney(player, property.houseCost);
     let logMessage: string;
 
-    if (canBuildHotel(property) && game.hotelsRemaining > 0) {
-      const hotel = buildHotel(property);
+    if (canBuildHotel(property, player.money, property.houseCost) && game.hotelsRemaining > 0) {
+      const hotel = buildHotel(property, player.money, property.houseCost);
       updatedTiles = updateTileInState(updatedTiles, hotel);
       updatedHousesRemaining += MAX_HOUSES_PER_PROPERTY; // Return houses
       updatedHotelsRemaining -= 1;
       logMessage = `${player.name} built a hotel on ${property.name}.`;
     } else {
-      const house = addHouse(property);
+      const house = addHouse(property, player.money, property.houseCost);
       updatedTiles = updateTileInState(updatedTiles, house);
       updatedHousesRemaining -= 1;
       logMessage = `${player.name} built a house on ${property.name}.`;
@@ -739,6 +743,7 @@ export class MonopolyEngine implements GameEngine {
 
     const tile = game.tiles.find(t => t.id === propertyId);
     if (!tile || tile.type !== 'property') return game;
+    if (!tile.ownerId || tile.ownerId !== playerId) return game;
 
     const property = tile as PropertyTile;
 
@@ -750,7 +755,7 @@ export class MonopolyEngine implements GameEngine {
     if (property.isHotel) {
       const withoutHotel = sellHotel(property);
       updatedTiles = updateTileInState(updatedTiles, withoutHotel);
-      updatedHousesRemaining += MAX_HOUSES_PER_PROPERTY;
+      // Houses already returned on hotel build, no double-count on sell
       updatedHotelsRemaining += 1;
       refundAmount = Math.floor((property.houseCost * (MAX_HOUSES_PER_PROPERTY + 1)) / 2);
     } else if (property.houses > 0) {
@@ -782,6 +787,7 @@ export class MonopolyEngine implements GameEngine {
     const tile = game.tiles.find(t => t.id === propertyId);
     if (!tile) return game;
     if (tile.type !== 'property' && tile.type !== 'railroad' && tile.type !== 'utility') return game;
+    if (!tile.ownerId || tile.ownerId !== playerId) return game;
 
     const check = canMortgage(tile as PropertyTile | RailroadTile | UtilityTile, []);
     if (!check.allowed) return game;
@@ -810,6 +816,7 @@ export class MonopolyEngine implements GameEngine {
 
     const ownable = tile as PropertyTile | RailroadTile | UtilityTile;
     if (!ownable.isMortgaged) return game;
+    if (!ownable.ownerId || ownable.ownerId !== playerId) return game;
 
     const cost = Math.ceil(ownable.mortgageValue * 1.1);
     if (player.money < cost) return game;
@@ -911,6 +918,21 @@ export class MonopolyEngine implements GameEngine {
     let updatedPlayers = [...game.players];
     let updatedTiles = [...game.tiles];
 
+    // Validate ownership and funds
+    if (!offer.offerProperties.every(propId => {
+      const tile = updatedTiles.find(t => t.id === propId);
+      return tile && (tile.type === 'property' || tile.type === 'railroad' || tile.type === 'utility') && tile.ownerId === offer.fromPlayerId;
+    })) return game;
+    if (!offer.requestProperties.every(propId => {
+      const tile = updatedTiles.find(t => t.id === propId);
+      return tile && (tile.type === 'property' || tile.type === 'railroad' || tile.type === 'utility') && tile.ownerId === offer.toPlayerId;
+    })) return game;
+    const fromPlayer = updatedPlayers.find(p => p.id === offer.fromPlayerId);
+    const toPlayer = updatedPlayers.find(p => p.id === offer.toPlayerId);
+    if (!fromPlayer || !toPlayer) return game;
+    if (fromPlayer.money < offer.offerMoney) return game;
+    if (toPlayer.money < offer.requestMoney) return game;
+
     // Transfer properties from offerer to recipient
     for (const propId of offer.offerProperties) {
       const tileIdx = updatedTiles.findIndex(t => t.id === propId);
@@ -920,11 +942,11 @@ export class MonopolyEngine implements GameEngine {
           updatedTiles[tileIdx] = { ...tile, ownerId: offer.toPlayerId } as typeof tile;
         }
       }
-      const fromPlayer = updatedPlayers.find(p => p.id === offer.fromPlayerId);
-      const toPlayer = updatedPlayers.find(p => p.id === offer.toPlayerId);
-      if (fromPlayer && toPlayer) {
-        updatedPlayers = updatePlayerInState(updatedPlayers, removeProperty(fromPlayer, propId));
-        updatedPlayers = updatePlayerInState(updatedPlayers, addProperty(toPlayer, propId));
+      const sender = updatedPlayers.find(p => p.id === offer.fromPlayerId);
+      const receiver = updatedPlayers.find(p => p.id === offer.toPlayerId);
+      if (sender && receiver) {
+        updatedPlayers = updatePlayerInState(updatedPlayers, removeProperty(sender, propId));
+        updatedPlayers = updatePlayerInState(updatedPlayers, addProperty(receiver, propId));
       }
     }
 
@@ -937,37 +959,33 @@ export class MonopolyEngine implements GameEngine {
           updatedTiles[tileIdx] = { ...tile, ownerId: offer.fromPlayerId } as typeof tile;
         }
       }
-      const fromPlayer = updatedPlayers.find(p => p.id === offer.toPlayerId);
-      const toPlayer = updatedPlayers.find(p => p.id === offer.fromPlayerId);
-      if (fromPlayer && toPlayer) {
-        updatedPlayers = updatePlayerInState(updatedPlayers, removeProperty(fromPlayer, propId));
-        updatedPlayers = updatePlayerInState(updatedPlayers, addProperty(toPlayer, propId));
+      const sender = updatedPlayers.find(p => p.id === offer.toPlayerId);
+      const receiver = updatedPlayers.find(p => p.id === offer.fromPlayerId);
+      if (sender && receiver) {
+        updatedPlayers = updatePlayerInState(updatedPlayers, removeProperty(sender, propId));
+        updatedPlayers = updatePlayerInState(updatedPlayers, addProperty(receiver, propId));
       }
     }
 
     // Transfer money
     if (offer.offerMoney > 0) {
-      const fromPlayer = updatedPlayers.find(p => p.id === offer.fromPlayerId);
-      const toPlayer = updatedPlayers.find(p => p.id === offer.toPlayerId);
-      if (fromPlayer && toPlayer) {
-        const fromUpdated = deductMoney(fromPlayer, offer.offerMoney);
-        const toUpdated = addMoney(toPlayer, offer.offerMoney);
+      const payer = updatedPlayers.find(p => p.id === offer.fromPlayerId);
+      const payee = updatedPlayers.find(p => p.id === offer.toPlayerId);
+      if (payer && payee && payer.money >= offer.offerMoney) {
         updatedPlayers = updatePlayerInState(
-          updatePlayerInState(updatedPlayers, fromUpdated),
-          toUpdated,
+          updatePlayerInState(updatedPlayers, deductMoney(payer, offer.offerMoney)),
+          addMoney(payee, offer.offerMoney),
         );
       }
     }
 
     if (offer.requestMoney > 0) {
-      const fromPlayer = updatedPlayers.find(p => p.id === offer.toPlayerId);
-      const toPlayer = updatedPlayers.find(p => p.id === offer.fromPlayerId);
-      if (fromPlayer && toPlayer) {
-        const fromUpdated = deductMoney(fromPlayer, offer.requestMoney);
-        const toUpdated = addMoney(toPlayer, offer.requestMoney);
+      const payer = updatedPlayers.find(p => p.id === offer.toPlayerId);
+      const payee = updatedPlayers.find(p => p.id === offer.fromPlayerId);
+      if (payer && payee && payer.money >= offer.requestMoney) {
         updatedPlayers = updatePlayerInState(
-          updatePlayerInState(updatedPlayers, fromUpdated),
-          toUpdated,
+          updatePlayerInState(updatedPlayers, deductMoney(payer, offer.requestMoney)),
+          addMoney(payee, offer.requestMoney),
         );
       }
     }
@@ -1092,27 +1110,27 @@ export class MonopolyEngine implements GameEngine {
       ...game,
       players: updatedPlayers,
     });
-    if (winner) {
-      return {
-        ...game,
-        players: updatedPlayers,
-        tiles: updatedTiles,
-        winnerId: winner,
-        status: 'completed',
-        endedAt: Date.now(),
-        logs: [...game.logs,
-          createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'}.` : ''}`, {}),
-          createLogEntry('win', winner, `${updatedPlayers.find(p => p.id === winner)?.name ?? 'Player'} wins!`, {}),
-        ],
-      };
-    }
+    const result: GameState = winner
+      ? {
+          ...game,
+          players: updatedPlayers,
+          tiles: updatedTiles,
+          winnerId: winner,
+          status: 'completed',
+          endedAt: Date.now(),
+          logs: [...game.logs,
+            createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'}.` : ''}`, {}),
+            createLogEntry('win', winner, `${updatedPlayers.find(p => p.id === winner)?.name ?? 'Player'} wins!`, {}),
+          ],
+        }
+      : {
+          ...game,
+          players: updatedPlayers,
+          tiles: updatedTiles,
+          logs: [...game.logs, createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'}.` : ''}`, {})],
+        };
 
-    return {
-      ...game,
-      players: updatedPlayers,
-      tiles: updatedTiles,
-      logs: [...game.logs, createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'}.` : ''}`, {})],
-    };
+    return this.getNextPlayer(result);
   }
 
   declareWinner(game: GameState): GameState {

@@ -8,6 +8,9 @@ export function createTradeOffer(
   requestProperties: string[],
   requestMoney: number,
 ): TradeOffer {
+  if (fromPlayerId === toPlayerId) throw new Error('Cannot trade with self');
+  if (offerMoney < 0) throw new Error('Offer money cannot be negative');
+  if (requestMoney < 0) throw new Error('Request money cannot be negative');
   return {
     fromPlayerId,
     toPlayerId,
@@ -20,6 +23,7 @@ export function createTradeOffer(
 }
 
 export function acceptTrade(offer: TradeOffer): TradeOffer {
+  if (offer.status !== 'pending') return offer;
   return { ...offer, status: 'accepted' };
 }
 

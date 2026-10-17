@@ -365,8 +365,8 @@ export interface ServerEventPayloads {
 }
 
 export interface ClientEventPayloads {
-  'lobby:create': { settings?: Partial<GameSettings> };
-  'lobby:join': { code: string; playerName: string; playerColor: PlayerColor };
+  'lobby:create': { settings?: Partial<GameSettings>; playerId: string; playerName?: string; playerColor?: PlayerColor };
+  'lobby:join': { code: string; playerName: string; playerColor: PlayerColor; playerId: string };
   'lobby:leave': {};
   'lobby:ready': { ready: boolean };
   'lobby:start-game': {};

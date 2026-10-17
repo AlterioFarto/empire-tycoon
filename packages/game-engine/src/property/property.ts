@@ -1,15 +1,18 @@
 import type { PropertyTile, RailroadTile, UtilityTile, Tile } from '@monopoly/shared';
 import { MAX_HOUSES_PER_PROPERTY, MORTGAGE_INTEREST_RATE } from '@monopoly/shared';
 
-export function canBuildHotel(property: PropertyTile): boolean {
+export function canBuildHotel(property: PropertyTile, playerMoney: number, houseCost: number): boolean {
+  if (playerMoney < houseCost) return false;
   return property.houses === MAX_HOUSES_PER_PROPERTY && !property.isHotel;
 }
 
-export function canAddHouse(property: PropertyTile): boolean {
+export function canAddHouse(property: PropertyTile, playerMoney: number, houseCost: number): boolean {
+  if (playerMoney < houseCost) return false;
   return property.houses < MAX_HOUSES_PER_PROPERTY && !property.isHotel;
 }
 
-export function addHouse(property: PropertyTile): PropertyTile {
+export function addHouse(property: PropertyTile, playerMoney: number, houseCost: number): PropertyTile {
+  if (playerMoney < houseCost) throw new Error('Insufficient funds');
   return { ...property, houses: property.houses + 1 };
 }
 
@@ -17,7 +20,8 @@ export function removeHouse(property: PropertyTile): PropertyTile {
   return { ...property, houses: Math.max(0, property.houses - 1) };
 }
 
-export function buildHotel(property: PropertyTile): PropertyTile {
+export function buildHotel(property: PropertyTile, playerMoney: number, houseCost: number): PropertyTile {
+  if (playerMoney < houseCost) throw new Error('Insufficient funds');
   return { ...property, houses: 0, isHotel: true };
 }
 

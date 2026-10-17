@@ -8,6 +8,17 @@ const SOCKET_URL = 'http://localhost:4000';
 let globalSocket: Socket | null = null;
 let listenersRegistered = false;
 
+export function getStablePlayerId(): string {
+  const key = 'monopoly:playerId';
+  if (typeof window === 'undefined') return 'ssr-no-id';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
 function ensureSocket(): Socket {
   if (globalSocket?.connected) return globalSocket;
 
@@ -38,7 +49,13 @@ function registerStoreListeners(): void {
 
   socket.on('connect', () => {
     store.getState().setSocketConnected(true);
-    store.getState().setPlayerId(socket.id ?? null);
+    // stable identity, not socket.id
+    store.getState().setPlayerId(getStablePlayerId());
+    // auto-reconnect if we have an active game
+    const { game, playerId } = store.getState();
+    if (game && playerId) {
+      socket.emit('game:reconnect', { gameId: game.id, playerId });
+    }
   });
 
   socket.on('disconnect', () => {
@@ -70,6 +87,7 @@ function registerStoreListeners(): void {
   });
 
   socket.on('error', (data: { message: string; code: string }) => {
+    // ignore reconnect noise if already handled
     store.getState().setError(data.message);
     setTimeout(() => store.getState().setError(null), 5000);
   });
@@ -92,6 +110,11 @@ export function useSocket(): Socket | null {
     const socket = ensureSocket();
     socketRef.current = socket;
     registerStoreListeners();
+    // ensure stable id is persisted immediately
+    const stable = getStablePlayerId();
+    if (!useGameStore.getState().playerId) {
+      useGameStore.getState().setPlayerId(stable);
+    }
 
     return () => {
       socketRef.current = null;

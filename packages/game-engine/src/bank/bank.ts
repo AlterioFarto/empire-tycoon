@@ -24,17 +24,23 @@ export function bankHasHotels(bank: BankState): boolean {
 }
 
 export function useHouse(bank: BankState): BankState {
+  if (bank.housesRemaining <= 0) return bank;
   return { ...bank, housesRemaining: bank.housesRemaining - 1 };
 }
 
 export function returnHouse(bank: BankState): BankState {
-  return { ...bank, housesRemaining: bank.housesRemaining + 1 };
+  const max = 32;
+  const newHouses = Math.min(bank.housesRemaining + 1, max);
+  return { ...bank, housesRemaining: newHouses };
 }
 
 export function useHotel(bank: BankState): BankState {
+  if (bank.hotelsRemaining <= 0) return bank;
   return { ...bank, hotelsRemaining: bank.hotelsRemaining - 1 };
 }
 
 export function returnHotel(bank: BankState): BankState {
-  return { ...bank, hotelsRemaining: bank.hotelsRemaining + 1 };
+  const max = 12;
+  const newHotels = Math.min(bank.hotelsRemaining + 1, max);
+  return { ...bank, hotelsRemaining: newHotels };
 }

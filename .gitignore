@@ -6,3 +6,5 @@ dist/
 .DS_Store
 coverage/
 .turbo/
+project-for-claude.txt
+repomix-output.xml

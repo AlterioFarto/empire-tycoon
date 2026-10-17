@@ -5,6 +5,8 @@ export function calculatePropertyRent(property: PropertyTile, totalInGroup: numb
   if (property.isMortgaged) return 0;
   if (property.isHotel) return property.rentWithHotel;
   if (property.houses > 0) {
+    const maxHouses = 4;
+    const clampedHouses = Math.min(property.houses, maxHouses);
     const rents = [
       property.rent,
       property.rentWithOneHouse,
@@ -12,7 +14,7 @@ export function calculatePropertyRent(property: PropertyTile, totalInGroup: numb
       property.rentWithThreeHouses,
       property.rentWithFourHouses,
     ];
-    return rents[property.houses] ?? property.rent;
+    return rents[clampedHouses] ?? property.rent;
   }
   if (totalInGroup === property.colorGroupCount && property.ownerId) {
     return property.rent * 2;
@@ -25,8 +27,9 @@ export function calculateRailroadRent(
   ownedRailroadsCount: number,
 ): number {
   if (railroad.isMortgaged) return 0;
+  if (ownedRailroadsCount < 1) return 0;
   const index = Math.min(ownedRailroadsCount - 1, RAILROAD_RENTS.length - 1);
-  return RAILROAD_RENTS[Math.max(0, index)] ?? RAILROAD_RENTS[0]!;
+  return RAILROAD_RENTS[index]!;
 }
 
 export function calculateUtilityRent(
@@ -35,6 +38,7 @@ export function calculateUtilityRent(
   diceRoll: DiceRoll,
 ): number {
   if (utility.isMortgaged) return 0;
+  if (ownedUtilitiesCount < 1) return 0;
   const multiplier = ownedUtilitiesCount === 2 ? UTILITY_MULTIPLIER_TWO : UTILITY_MULTIPLIER_ONE;
   return diceRoll.total * multiplier;
 }

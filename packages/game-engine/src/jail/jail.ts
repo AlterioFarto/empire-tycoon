@@ -52,6 +52,12 @@ export function processJailRoll(player: Player, roll: DiceRoll): JailResult {
   };
 
   if (newPlayer.jailTurns >= MAX_TURNS_WITHOUT_DOUBLES_IN_JAIL) {
+    if (newPlayer.money < JAIL_FINE) {
+      return {
+        player: newPlayer,
+        action: 'stayed',
+      };
+    }
     return {
       player: {
         ...newPlayer,

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSocket, emitEvent } from '../hooks/useSocket.js';
+import { useSocket, emitEvent, getStablePlayerId } from '../hooks/useSocket.js';
 import { useGameStore } from '../store/gameStore.js';
 
 export function HomePage() {
@@ -25,7 +25,16 @@ export function HomePage() {
   ];
 
   function handleCreateLobby() {
-    emitEvent('lobby:create', { settings: {} });
+    if (!playerName.trim()) {
+      setError('Enter your name');
+      return;
+    }
+    emitEvent('lobby:create', {
+      settings: {},
+      playerId: getStablePlayerId(),
+      playerName: playerName.trim(),
+      playerColor,
+    });
 
     const checkLobby = setInterval(() => {
       const { lobbyCode } = useGameStore.getState();
@@ -52,6 +61,7 @@ export function HomePage() {
       code: joinCode.toUpperCase(),
       playerName: playerName.trim(),
       playerColor,
+      playerId: getStablePlayerId(),
     });
 
     const checkJoin = setInterval(() => {
