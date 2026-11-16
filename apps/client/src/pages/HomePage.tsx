@@ -1,17 +1,21 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSocket, emitEvent, getStablePlayerId } from '../hooks/useSocket.js';
 import { useGameStore } from '../store/gameStore.js';
 
 export function HomePage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   useSocket();
 
-  const [joinCode, setJoinCode] = useState('');
+  const inviteCode = (searchParams.get('code') ?? '').toUpperCase();
+  const [joinCode, setJoinCode] = useState(inviteCode);
   const [playerName, setPlayerName] = useState('');
   const [playerColor, setPlayerColor] = useState('red');
-  const [showJoin, setShowJoin] = useState(false);
+  const [showJoin, setShowJoin] = useState(Boolean(inviteCode));
   const [error, setError] = useState<string | null>(null);
+  const storeError = useGameStore((s) => s.error);
+  const setStoreError = useGameStore((s) => s.setError);
 
   const colors = [
     { value: 'red', label: 'Red', class: 'bg-red-500' },
@@ -29,6 +33,10 @@ export function HomePage() {
       setError('Enter your name');
       return;
     }
+    setError(null);
+    setStoreError(null);
+    localStorage.setItem('monopoly:playerName', playerName.trim());
+    localStorage.setItem('monopoly:playerColor', playerColor);
     emitEvent('lobby:create', {
       settings: {},
       playerId: getStablePlayerId(),
@@ -56,6 +64,10 @@ export function HomePage() {
       setError('Enter your name');
       return;
     }
+    setError(null);
+    setStoreError(null);
+    localStorage.setItem('monopoly:playerName', playerName.trim());
+    localStorage.setItem('monopoly:playerColor', playerColor);
 
     emitEvent('lobby:join', {
       code: joinCode.toUpperCase(),
@@ -106,9 +118,9 @@ export function HomePage() {
           </div>
         </div>
 
-        {error && (
+        {(error ?? storeError) && (
           <div className="mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm">
-            {error}
+            {error ?? storeError}
           </div>
         )}
 
@@ -121,7 +133,11 @@ export function HomePage() {
           </button>
           <button
             className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition"
-            onClick={() => setShowJoin(!showJoin)}
+            onClick={() => {
+              setStoreError(null);
+              setError(null);
+              setShowJoin(!showJoin);
+            }}
           >
             Join Lobby
           </button>

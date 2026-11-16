@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  canBuyProperty, canBuildOnProperty, canMortgage, canUnmortgage,
-  canTradeProperty, hasPlayerWon,
+  canBuyProperty, canBuildOnProperty, canMortgage, hasPlayerWon,
 } from '../src/rules/rules.js';
 import type { PropertyTile, Player, Tile, GameSettings, GameState } from '@monopoly/shared';
 

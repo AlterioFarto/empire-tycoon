@@ -67,7 +67,7 @@ describe('Bug 2 — Jail roll: one attempt per turn, tile resolved on release', 
   }
 
   it('failed roll ends the turn (no re-roll in same turn)', () => {
-    let game = jailedGame(0);
+    const game = jailedGame(0);
     mockRoll(2, 3); // not doubles
     const { game: after } = engine.rollForJail(game, 'p1');
     expect(after.currentTurn!.playerId).toBe('p2'); // turn passed on
@@ -76,7 +76,7 @@ describe('Bug 2 — Jail roll: one attempt per turn, tile resolved on release', 
   });
 
   it('doubles releases the player, moves them, and resolves the tile (no extra roll)', () => {
-    let game = jailedGame(1);
+    const game = jailedGame(1);
     mockRoll(3, 3); // doubles -> release
     const { game: after } = engine.rollForJail(game, 'p1');
     const alice = after.players.find(p => p.id === 'p1')!;

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GameState, Lobby, DiceRoll } from '@monopoly/shared';
+import type { GameState, Lobby, DiceRoll, MonopolyCard } from '@monopoly/shared';
 
 interface GameStore {
   // Connection
@@ -21,6 +21,8 @@ interface GameStore {
   // UI
   lastRoll: DiceRoll | null;
   setLastRoll: (roll: DiceRoll | null) => void;
+  lastDrawnCard: MonopolyCard | null;
+  setLastDrawnCard: (card: MonopolyCard | null) => void;
   chatMessages: ChatMessage[];
   addChatMessage: (msg: ChatMessage) => void;
   error: string | null;
@@ -49,6 +51,8 @@ export const useGameStore = create<GameStore>((set) => ({
 
   lastRoll: null,
   setLastRoll: (roll) => set({ lastRoll: roll }),
+  lastDrawnCard: null,
+  setLastDrawnCard: (card) => set({ lastDrawnCard: card }),
   chatMessages: [],
   addChatMessage: (msg) =>
     set((state) => ({ chatMessages: [...state.chatMessages, msg] })),

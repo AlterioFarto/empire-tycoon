@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import type { PlayerColor } from '@monopoly/shared';
 import { useGameStore } from '../store/gameStore.js';
-import { useSocket, emitEvent } from '../hooks/useSocket.js';
+import { useSocket, emitEvent, getStablePlayerId } from '../hooks/useSocket.js';
 
 export function LobbyPage() {
   const { code } = useParams<{ code: string }>();
@@ -11,10 +12,13 @@ export function LobbyPage() {
   const lobby = useGameStore((s) => s.lobby);
   const setLobbyCode = useGameStore((s) => s.setLobbyCode);
   const game = useGameStore((s) => s.game);
+  const playerId = useGameStore((s) => s.playerId);
+  const error = useGameStore((s) => s.error);
+  const autoJoinAttempted = useRef(false);
 
   useEffect(() => {
     if (code) setLobbyCode(code);
-  }, [code]);
+  }, [code, setLobbyCode]);
 
   useEffect(() => {
     if (game) {
@@ -22,16 +26,43 @@ export function LobbyPage() {
     }
   }, [game, navigate]);
 
+  useEffect(() => {
+    if (!code || lobby?.code === code || autoJoinAttempted.current) return;
+    const storedName = localStorage.getItem('monopoly:playerName');
+    if (!storedName) {
+      navigate(`/?code=${encodeURIComponent(code)}`, { replace: true });
+      return;
+    }
+    autoJoinAttempted.current = true;
+    const storedColor = (localStorage.getItem('monopoly:playerColor') ?? 'red') as PlayerColor;
+    emitEvent('lobby:join', {
+      code,
+      playerName: storedName,
+      playerColor: storedColor,
+      playerId: getStablePlayerId(),
+    });
+  }, [code, lobby?.code, navigate]);
+
   if (!lobby) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900">
-        <div className="text-gray-400 text-xl">Connecting to lobby...</div>
+        <div className="text-center">
+          <div className="text-gray-400 text-xl mb-4">
+            {error ?? 'Connecting to lobby...'}
+          </div>
+          <button
+            className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-6 rounded-lg transition"
+            onClick={() => navigate('/', { replace: true })}
+          >
+            Back to Home
+          </button>
+        </div>
       </div>
     );
   }
   const lobbyData = lobby;
 
-  const isHost = lobbyData.hostId === useGameStore.getState().playerId;
+  const isHost = lobbyData.hostId === playerId;
 
   function handleStart() {
     emitEvent('lobby:start-game', {});

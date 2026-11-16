@@ -89,6 +89,7 @@ export interface Player {
   inJail: boolean;
   jailTurns: number;
   getOutOfJailCards: number;
+  heldJailCardIds: string[];
   bankrupt: boolean;
   hasRolled: boolean;
   turnOrder: number;
@@ -339,6 +340,7 @@ export interface Lobby {
 export type LobbyStatus = 'open' | 'in-game' | 'closed';
 
 export interface ServerEventPayloads {
+  'session:issued': { playerId: string; sessionToken: string };
   'lobby:created': { lobbyId: string; code: string };
   'lobby:joined': { lobbyId: string; player: Player };
   'lobby:left': { lobbyId: string; playerId: string };
@@ -365,30 +367,31 @@ export interface ServerEventPayloads {
 }
 
 export interface ClientEventPayloads {
-  'lobby:create': { settings?: Partial<GameSettings>; playerId: string; playerName?: string; playerColor?: PlayerColor };
-  'lobby:join': { code: string; playerName: string; playerColor: PlayerColor; playerId: string };
-  'lobby:leave': {};
+  'lobby:create': { settings?: Partial<GameSettings>; playerId: string; playerName?: string; playerColor?: PlayerColor; sessionToken?: string };
+  'lobby:join': { code: string; playerName: string; playerColor: PlayerColor; playerId: string; sessionToken?: string };
+  'lobby:leave': Record<string, never>;
   'lobby:ready': { ready: boolean };
-  'lobby:start-game': {};
+  'lobby:start-game': Record<string, never>;
   'lobby:update-settings': { settings: Partial<GameSettings> };
-  'game:roll-dice': {};
-  'game:buy-property': {};
-  'game:pay-tax-flat': {};
-  'game:pay-tax-percentage': {};
-  'game:pass-auction': {};
+  'game:roll-dice': Record<string, never>;
+  'game:buy-property': Record<string, never>;
+  'game:decline-property': Record<string, never>;
+  'game:pay-tax-flat': Record<string, never>;
+  'game:pay-tax-percentage': Record<string, never>;
+  'game:pass-auction': Record<string, never>;
   'game:auction-bid': { amount: number };
   'game:build-house': { propertyId: string };
   'game:sell-house': { propertyId: string };
   'game:mortgage': { propertyId: string };
   'game:unmortgage': { propertyId: string };
-  'game:use-jail-card': {};
-  'game:pay-jail-fine': {};
-  'game:roll-for-jail': {};
-  'game:end-turn': {};
+  'game:use-jail-card': Record<string, never>;
+  'game:pay-jail-fine': Record<string, never>;
+  'game:roll-for-jail': Record<string, never>;
+  'game:end-turn': Record<string, never>;
   'game:trade-offer': { offer: Omit<TradeOffer, 'status'> };
-  'game:trade-accept': {};
-  'game:trade-reject': {};
-  'game:trade-cancel': {};
+  'game:trade-accept': Record<string, never>;
+  'game:trade-reject': Record<string, never>;
+  'game:trade-cancel': Record<string, never>;
   'game:send-chat': { message: string };
-  'game:reconnect': { gameId: string; playerId: string };
+  'game:reconnect': { gameId: string; playerId: string; sessionToken?: string };
 }

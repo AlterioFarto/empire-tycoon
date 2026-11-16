@@ -79,7 +79,7 @@ export function canMortgage(
   if (property.isMortgaged) {
     return { allowed: false, reason: 'Already mortgaged' };
   }
-  if (property.type === 'property' && !property.isHotel) {
+  if (property.type === 'property') {
     const prop = property as PropertyTile;
     if (prop.houses > 0) {
       return { allowed: false, reason: 'Must sell all houses first' };

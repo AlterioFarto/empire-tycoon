@@ -56,8 +56,7 @@ export class LobbyManager {
       }
       const abandoned = manager.getPlayers().every(p => !p.connected);
       if (abandoned && now - createdAt > LOBBY_TTL_MS) {
-        manager.removeAll();
-        LOBBY_CREATED_AT.delete(lobbyId);
+        LobbyManager.remove(lobbyId);
       }
     }
   }
@@ -149,6 +148,7 @@ export class LobbyManager {
       inJail: false,
       jailTurns: 0,
       getOutOfJailCards: 0,
+      heldJailCardIds: [],
       bankrupt: false,
       hasRolled: false,
       turnOrder: this.lobby.players.length,

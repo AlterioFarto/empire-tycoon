@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { DiceRoll } from '@monopoly/shared';
 
@@ -20,15 +19,6 @@ function RandomDotPattern() {
 }
 
 export function DiceRollDisplay({ roll, rolling, onRoll, canRoll, phase }: DiceRollProps) {
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Clean up interval on unmount
-  useEffect(() => {
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, []);
-
   const DOT_PATTERNS: Record<number, [number, number][]> = {
     1: [[1, 1]],
     2: [[0, 2], [2, 0]],

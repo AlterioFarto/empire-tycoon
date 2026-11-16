@@ -2,6 +2,7 @@ import type { Server as SocketIOServer, Socket } from 'socket.io';
 import type { PlayerColor, GameState } from '@monopoly/shared';
 import { LobbyManager } from '../lobby/lobbyManager.js';
 import { GameManager } from '../game/gameManager.js';
+import { SessionManager } from '../auth/sessionManager.js';
 import { MonopolyEngine } from '@monopoly/game-engine';
 import { v4 as uuid } from 'uuid';
 import {
@@ -40,7 +41,20 @@ export function registerSocketHandlers(io: SocketIOServer): void {
 
     const bindStable = (stableId: string): void => {
       stablePlayerId = stableId;
-      GameManager.bindSocketToPlayer(socket.id, stableId);
+      const previousSocketId = GameManager.bindSocketToPlayer(socket.id, stableId);
+      if (previousSocketId) {
+        io.sockets.sockets.get(previousSocketId)?.disconnect(true);
+      }
+    };
+
+    const issueSession = (playerId: string): void => {
+      const sessionToken = SessionManager.issue(playerId);
+      socket.emit('session:issued', { playerId, sessionToken });
+    };
+
+    const sessionCanClaim = (playerId: string, supplied: unknown): boolean => {
+      if (!SessionManager.hasToken(playerId)) return true;
+      return typeof supplied === 'string' && SessionManager.verify(playerId, supplied);
     };
 
     // ── Lobby Events ──
@@ -66,6 +80,10 @@ export function registerSocketHandlers(io: SocketIOServer): void {
       const stableId = (pid as string | undefined) ?? null;
       if (!stableId) {
         emitInvalid(socket, 'playerId required');
+        return;
+      }
+      if (!sessionCanClaim(stableId, raw.sessionToken)) {
+        socket.emit('error', { message: 'Invalid player session', code: 'SESSION_INVALID' });
         return;
       }
       if (raw.playerName !== undefined && typeof raw.playerName !== 'string') {
@@ -100,6 +118,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         return;
       }
       socket.join(lobby.getId());
+      issueSession(stableId);
       socket.emit('lobby:created', { lobbyId: lobby.getId(), code: lobby.getCode() });
       socket.emit('lobby:updated', { lobby: lobby.getLobby() });
     });
@@ -138,12 +157,17 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         socket.emit('error', { message: 'Lobby not found', code: 'LOBBY_NOT_FOUND' });
         return;
       }
+      if (!sessionCanClaim(stableId, raw.sessionToken)) {
+        socket.emit('error', { message: 'Invalid player session', code: 'SESSION_INVALID' });
+        return;
+      }
 
       if (lobby.hasPlayer(stableId)) {
         lobby.tryReconnectPlayer(stableId);
         bindStable(stableId);
         currentLobbyId = lobby.getId();
         socket.join(lobby.getId());
+        issueSession(stableId);
         io.to(lobby.getId()).emit('lobby:updated', { lobby: lobby.getLobby() });
         socket.emit('lobby:joined', {
           lobbyId: lobby.getId(),
@@ -162,6 +186,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
       currentLobbyId = lobby.getId();
 
       socket.join(lobby.getId());
+      issueSession(stableId);
       io.to(lobby.getId()).emit('lobby:joined', {
         lobbyId: lobby.getId(),
         player: lobby.getPlayers().find(p => p.id === stableId)!,
@@ -273,20 +298,33 @@ export function registerSocketHandlers(io: SocketIOServer): void {
       }
       processGameAction(socket, stable, currentLobbyId, io, (game) => {
         const result = engine.rollDice(game, stable);
-        GameManager.setGame(game.id, result.game);
+        if (result.roll.total <= 0) return game;
 
+        GameManager.setGame(game.id, result.game);
         const newGame = result.game;
         io.to(currentLobbyId!).emit('game:dice-roll', { playerId: stable, roll: result.roll });
         io.to(currentLobbyId!).emit('game:state-update', { game: newGame });
 
         const currentPlayer = newGame.players.find(p => p.id === stable);
-        if (currentPlayer && !currentPlayer.inJail) {
-          const resolvedGame = engine.handleTileLanding(newGame, stable);
-          GameManager.setGame(game.id, resolvedGame);
-          io.to(currentLobbyId!).emit('game:state-update', { game: resolvedGame });
+        if (!currentPlayer || currentPlayer.inJail || newGame.currentTurn?.playerId !== stable) {
+          return newGame;
         }
 
-        return result.game;
+        const resolvedGame = engine.handleTileLanding(newGame, stable);
+        GameManager.setGame(game.id, resolvedGame);
+        io.to(currentLobbyId!).emit('game:state-update', { game: resolvedGame });
+
+        const cardLog = resolvedGame.logs
+          .slice(game.logs.length)
+          .find(log => log.type === 'card' && log.data?.card);
+        if (cardLog?.data?.card) {
+          io.to(currentLobbyId!).emit('game:card-drawn', {
+            playerId: stable,
+            card: cardLog.data.card,
+          });
+        }
+
+        return resolvedGame;
       });
     });
 
@@ -305,6 +343,23 @@ export function registerSocketHandlers(io: SocketIOServer): void {
       });
     });
 
+    socket.on('game:decline-property', () => {
+      const stable = getStable();
+      if (!stable) {
+        emitInvalid(socket, 'not authenticated');
+        return;
+      }
+      processGameAction(socket, stable, currentLobbyId, io, (game) => {
+        const updated = engine.declineProperty(game, stable);
+        GameManager.setGame(game.id, updated);
+        if (updated.auction && updated.auction.active) {
+          io.to(currentLobbyId!).emit('game:auction-started', { auction: updated.auction });
+        }
+        io.to(currentLobbyId!).emit('game:state-update', { game: updated });
+        return updated;
+      });
+    });
+
     socket.on('game:pass-auction', () => {
       const stable = getStable();
       if (!stable) {
@@ -312,8 +367,17 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         return;
       }
       processGameAction(socket, stable, currentLobbyId, io, (game) => {
+        const auction = game.auction;
         const updated = engine.passAuction(game, stable);
         GameManager.setGame(game.id, updated);
+        if (auction && !updated.auction) {
+          const wonTile = updated.tiles.find(tile => tile.id === auction.propertyId);
+          io.to(currentLobbyId!).emit('game:auction-ended', {
+            propertyId: auction.propertyId,
+            winnerId: wonTile && 'ownerId' in wonTile ? wonTile.ownerId : null,
+            amount: auction.currentBid,
+          });
+        }
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -502,6 +566,17 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         GameManager.setGame(game.id, result.game);
         io.to(currentLobbyId!).emit('game:dice-roll', { playerId: stable, roll: result.roll });
         io.to(currentLobbyId!).emit('game:state-update', { game: result.game });
+
+        const cardLog = result.game.logs
+          .slice(game.logs.length)
+          .find(log => log.type === 'card' && log.data?.card);
+        if (cardLog?.data?.card) {
+          io.to(currentLobbyId!).emit('game:card-drawn', {
+            playerId: stable,
+            card: cardLog.data.card,
+          });
+        }
+
         return result.game;
       });
     });
@@ -521,9 +596,6 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         });
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
 
-        if (updated.winnerId) {
-          io.to(currentLobbyId!).emit('game:player-won', { playerId: updated.winnerId });
-        }
         return updated;
       });
     });
@@ -572,9 +644,11 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         return;
       }
       processGameAction(socket, stable, currentLobbyId, io, (game) => {
-        const updated = engine.acceptTrade(game);
+        const updated = engine.acceptTrade(game, stable);
         GameManager.setGame(game.id, updated);
-        io.to(currentLobbyId!).emit('game:trade-update', { offer: updated.tradeOffer! });
+        if (updated.tradeOffer) {
+          io.to(currentLobbyId!).emit('game:trade-update', { offer: updated.tradeOffer });
+        }
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
       });
@@ -587,7 +661,21 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         return;
       }
       processGameAction(socket, stable, currentLobbyId, io, (game) => {
-        const updated = engine.rejectTrade(game);
+        const updated = engine.rejectTrade(game, stable);
+        GameManager.setGame(game.id, updated);
+        io.to(currentLobbyId!).emit('game:state-update', { game: updated });
+        return updated;
+      });
+    });
+
+    socket.on('game:trade-cancel', () => {
+      const stable = getStable();
+      if (!stable) {
+        emitInvalid(socket, 'not authenticated');
+        return;
+      }
+      processGameAction(socket, stable, currentLobbyId, io, (game) => {
+        const updated = engine.cancelTrade(game, stable);
         GameManager.setGame(game.id, updated);
         io.to(currentLobbyId!).emit('game:state-update', { game: updated });
         return updated;
@@ -627,6 +715,10 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         return;
       }
       const stableId = playerId as string;
+      if (!SessionManager.verify(stableId, typeof raw.sessionToken === 'string' ? raw.sessionToken : undefined)) {
+        socket.emit('error', { message: 'Invalid player session', code: 'SESSION_INVALID' });
+        return;
+      }
       const game = GameManager.getGame(gameId as string);
       if (!game) {
         socket.emit('error', { message: 'Game not found', code: 'GAME_NOT_FOUND' });
@@ -637,6 +729,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         return;
       }
       bindStable(stableId);
+      issueSession(stableId);
       GameManager.registerPlayer(stableId, gameId as string);
 
       const lobbyId = GameManager.getLobbyIdByGameId(gameId as string) ?? LobbyManager.getByPlayerId(stableId)?.getId();
@@ -665,9 +758,16 @@ export function registerSocketHandlers(io: SocketIOServer): void {
 
     socket.on('disconnect', () => {
       const stable = GameManager.getStableBySocket(socket.id) ?? stablePlayerId;
+      const ownsStable = stable ? GameManager.getSocketByStable(stable) === socket.id : false;
       GameManager.unbindSocket(socket.id);
 
-      if (currentLobbyId && stable) {
+      if (!ownsStable || !stable) {
+        stablePlayerId = null;
+        currentLobbyId = null;
+        return;
+      }
+
+      if (currentLobbyId) {
         const lobby = LobbyManager.getById(currentLobbyId);
         if (lobby) {
           lobby.setPlayerConnected(stable, false);
@@ -678,7 +778,7 @@ export function registerSocketHandlers(io: SocketIOServer): void {
             if (lobbyGame) GameManager.removeGame(lobbyGame.id);
           }
         }
-      } else if (stable) {
+      } else {
         const lobbyByPlayer = LobbyManager.getByPlayerId(stable);
         if (lobbyByPlayer) {
           lobbyByPlayer.setPlayerConnected(stable, false);
@@ -686,18 +786,17 @@ export function registerSocketHandlers(io: SocketIOServer): void {
         }
       }
 
-      if (stable) {
-        const game = GameManager.getGameByPlayerId(stable);
-        if (game) {
-          GameManager.setGame(game.id, {
-            ...game,
-            players: game.players.map(p =>
-              p.id === stable ? { ...p, connected: false } : p,
-            ),
-          });
-        }
+      const game = GameManager.getGameByPlayerId(stable);
+      if (game) {
+        GameManager.setGame(game.id, {
+          ...game,
+          players: game.players.map(p =>
+            p.id === stable ? { ...p, connected: false } : p,
+          ),
+        });
       }
 
+      stablePlayerId = null;
       currentLobbyId = null;
     });
   });
@@ -707,7 +806,7 @@ function processGameAction(
   socket: Socket,
   stableId: string,
   roomId: string | null,
-  _io: SocketIOServer,
+  io: SocketIOServer,
   action: (game: GameState) => GameState,
 ): void {
   if (!roomId || !socket.rooms.has(roomId)) {
@@ -729,6 +828,9 @@ function processGameAction(
 
   try {
     const updated = action(game);
+    if (updated.winnerId && updated.winnerId !== game.winnerId) {
+      io.to(roomId).emit('game:player-won', { playerId: updated.winnerId });
+    }
     GameManager.removeGameIfCompleted(updated.id);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'action failed';

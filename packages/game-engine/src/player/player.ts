@@ -18,6 +18,7 @@ export function createPlayer(
     inJail: false,
     jailTurns: 0,
     getOutOfJailCards: 0,
+    heldJailCardIds: [],
     bankrupt: false,
     hasRolled: false,
     turnOrder,

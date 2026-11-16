@@ -45,7 +45,7 @@ export function LocalGamePage() {
     if (lastDrawnCard && activeModal !== 'card') {
       openModal('card');
     }
-  }, [lastDrawnCard]);
+  }, [lastDrawnCard, activeModal, openModal]);
 
   if (!game) return null;
 

@@ -231,7 +231,7 @@ export const useLocalGameStore = create<LocalGameStore>((set, get) => ({
         if (!s2.game?.currentTurn) return;
 
         // Resolve tile landing at the position rollDice moved the player to
-        let resolved = engine.handleTileLanding(rolledGame, playerId);
+        const resolved = engine.handleTileLanding(rolledGame, playerId);
 
         // Check if a card was drawn (look at latest log)
         const latestLog = resolved.logs[resolved.logs.length - 1];
@@ -418,22 +418,25 @@ export const useLocalGameStore = create<LocalGameStore>((set, get) => ({
 
   acceptTrade: () => {
     const state = get();
-    if (!state.game) return;
-    const game = engine.acceptTrade(state.game);
+    const offer = state.game?.tradeOffer;
+    if (!state.game || !offer) return;
+    const game = engine.acceptTrade(state.game, offer.toPlayerId);
     set({ game });
   },
 
   rejectTrade: () => {
     const state = get();
-    if (!state.game) return;
-    const game = engine.rejectTrade(state.game);
+    const offer = state.game?.tradeOffer;
+    if (!state.game || !offer) return;
+    const game = engine.rejectTrade(state.game, offer.toPlayerId);
     set({ game });
   },
 
   cancelTrade: () => {
     const state = get();
-    if (!state.game) return;
-    const game = engine.cancelTrade(state.game);
+    const offer = state.game?.tradeOffer;
+    if (!state.game || !offer) return;
+    const game = engine.cancelTrade(state.game, offer.fromPlayerId);
     set({ game });
   },
 

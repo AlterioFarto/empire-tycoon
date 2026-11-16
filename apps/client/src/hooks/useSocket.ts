@@ -1,12 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import type { Socket } from 'socket.io-client';
 import { io } from 'socket.io-client';
+import type { DiceRoll, GameState, Lobby, MonopolyCard } from '@monopoly/shared';
 import { useGameStore } from '../store/gameStore.js';
 
 const SOCKET_URL = 'http://localhost:4000';
 
 let globalSocket: Socket | null = null;
 let listenersRegistered = false;
+let desiredGameId: string | null = null;
 
 export function getStablePlayerId(): string {
   const key = 'monopoly:playerId';
@@ -17,6 +19,16 @@ export function getStablePlayerId(): string {
     localStorage.setItem(key, id);
   }
   return id;
+}
+
+export function getSessionToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('monopoly:sessionToken');
+}
+
+export function setSessionToken(token: string): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('monopoly:sessionToken', token);
 }
 
 function ensureSocket(): Socket {
@@ -39,6 +51,14 @@ function ensureSocket(): Socket {
   return globalSocket;
 }
 
+function requestReconnect(gameId: string): void {
+  if (!globalSocket?.connected) return;
+  const { playerId } = useGameStore.getState();
+  const sessionToken = getSessionToken();
+  if (!playerId || !sessionToken) return;
+  globalSocket.emit('game:reconnect', { gameId, playerId, sessionToken });
+}
+
 function registerStoreListeners(): void {
   if (listenersRegistered) return;
   listenersRegistered = true;
@@ -51,35 +71,43 @@ function registerStoreListeners(): void {
     store.getState().setSocketConnected(true);
     // stable identity, not socket.id
     store.getState().setPlayerId(getStablePlayerId());
-    // auto-reconnect if we have an active game
-    const { game, playerId } = store.getState();
-    if (game && playerId) {
-      socket.emit('game:reconnect', { gameId: game.id, playerId });
-    }
+    // auto-reconnect to the route game or the game already in the store
+    const { game } = store.getState();
+    const gameId = desiredGameId ?? game?.id;
+    if (gameId) requestReconnect(gameId);
   });
 
   socket.on('disconnect', () => {
     store.getState().setSocketConnected(false);
   });
 
+  socket.on('session:issued', (data: { playerId: string; sessionToken: string }) => {
+    setSessionToken(data.sessionToken);
+    store.getState().setPlayerId(data.playerId);
+  });
+
   socket.on('lobby:created', (data: { lobbyId: string; code: string }) => {
     store.getState().setLobbyCode(data.code);
   });
 
-  socket.on('lobby:updated', (data: { lobby: any }) => {
+  socket.on('lobby:updated', (data: { lobby: Lobby }) => {
     store.getState().setLobby(data.lobby);
   });
 
-  socket.on('game:started', (data: { game: any }) => {
+  socket.on('game:started', (data: { game: GameState }) => {
     store.getState().setGame(data.game);
   });
 
-  socket.on('game:state-update', (data: { game: any }) => {
+  socket.on('game:state-update', (data: { game: GameState }) => {
     store.getState().setGame(data.game);
   });
 
-  socket.on('game:dice-roll', (data: { playerId: string; roll: any }) => {
+  socket.on('game:dice-roll', (data: { playerId: string; roll: DiceRoll }) => {
     store.getState().setLastRoll(data.roll);
+  });
+
+  socket.on('game:card-drawn', (data: { playerId: string; card: MonopolyCard }) => {
+    store.getState().setLastDrawnCard(data.card);
   });
 
   socket.on('chat:message', (data: { playerId: string; message: string; timestamp: number }) => {
@@ -87,7 +115,6 @@ function registerStoreListeners(): void {
   });
 
   socket.on('error', (data: { message: string; code: string }) => {
-    // ignore reconnect noise if already handled
     store.getState().setError(data.message);
     setTimeout(() => store.getState().setError(null), 5000);
   });
@@ -101,29 +128,25 @@ export function getSocket(): Socket | null {
  * Initializes the singleton Socket.IO connection and registers
  * global store-bound event listeners exactly once.
  *
- * Safe to call from any component – unmount does NOT disconnect.
+ * Pass the game id from the route so a page reload can reconnect
+ * with the locally stored stable player id and session token.
+ * Safe to call from any component - unmount does NOT disconnect.
  */
-export function useSocket(): Socket | null {
-  const socketRef = useRef<Socket | null>(null);
-
+export function useSocket(gameId?: string): void {
   useEffect(() => {
-    const socket = ensureSocket();
-    socketRef.current = socket;
+    desiredGameId = gameId ?? null;
+    ensureSocket();
     registerStoreListeners();
-    // ensure stable id is persisted immediately
     const stable = getStablePlayerId();
     if (!useGameStore.getState().playerId) {
       useGameStore.getState().setPlayerId(stable);
     }
-
-    return () => {
-      socketRef.current = null;
-    };
-  }, []);
-
-  return socketRef.current;
+    if (gameId) requestReconnect(gameId);
+  }, [gameId]);
 }
 
-export function emitEvent(event: string, data?: Record<string, unknown>): void {
-  globalSocket?.emit(event, data);
+export function emitEvent(event: string, data: Record<string, unknown> = {}): void {
+  const sessionToken = getSessionToken();
+  const payload = sessionToken ? { ...data, sessionToken } : data;
+  globalSocket?.emit(event, payload);
 }

@@ -49,6 +49,9 @@ export class GameManager {
 
   static setGame(gameId: string, game: GameState): void {
     ACTIVE_GAMES.set(gameId, game);
+    if (!GAME_CREATED_AT.has(gameId)) {
+      GAME_CREATED_AT.set(gameId, Date.now());
+    }
   }
 
   static registerGameForLobby(gameId: string, lobbyId: string): void {
@@ -64,7 +67,7 @@ export class GameManager {
   }
 
   // socket <-> stable binding
-  static bindSocketToPlayer(socketId: string, stableId: string): void {
+  static bindSocketToPlayer(socketId: string, stableId: string): string | undefined {
     const oldSocket = STABLE_TO_SOCKET.get(stableId);
     if (oldSocket && oldSocket !== socketId) {
       SOCKET_TO_STABLE.delete(oldSocket);
@@ -75,6 +78,7 @@ export class GameManager {
     }
     SOCKET_TO_STABLE.set(socketId, stableId);
     STABLE_TO_SOCKET.set(stableId, socketId);
+    return oldSocket && oldSocket !== socketId ? oldSocket : undefined;
   }
 
   static unbindSocket(socketId: string): string | undefined {

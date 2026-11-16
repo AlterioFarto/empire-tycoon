@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import type { PropertyTile } from '@monopoly/shared';
 import { MonopolyEngine } from '../src/engine/engine.js';
 
 describe('MonopolyEngine Integration', () => {
@@ -217,7 +218,7 @@ describe('MonopolyEngine Integration', () => {
     };
 
     game = engine.buildHouse(game, 'p1', 'property-1');
-    const prop1 = game.tiles.find(t => t.id === 'property-1') as any;
+    const prop1 = game.tiles.find(t => t.id === 'property-1') as PropertyTile;
     expect(prop1.houses).toBe(1);
   });
 
@@ -259,7 +260,7 @@ describe('MonopolyEngine Integration', () => {
     const alice = game.players.find(p => p.id === 'p1')!;
 
     expect(alice.money).toBeGreaterThan(moneyBefore);
-    const prop1 = game.tiles.find(t => t.id === 'property-1') as any;
+    const prop1 = game.tiles.find(t => t.id === 'property-1') as PropertyTile;
     expect(prop1.isMortgaged).toBe(true);
   });
 
@@ -288,7 +289,7 @@ describe('MonopolyEngine Integration', () => {
     expect(game.tradeOffer).not.toBeNull();
     expect(game.tradeOffer!.status).toBe('pending');
 
-    game = engine.acceptTrade(game);
+    game = engine.acceptTrade(game, 'p2');
     expect(game.tradeOffer).toBeNull();
 
     const alice = game.players.find(p => p.id === 'p1')!;
@@ -311,6 +312,11 @@ describe('MonopolyEngine Integration', () => {
     game = engine.handleTileLanding(game, 'p1');
 
     // End turn - if Alice rolled doubles, she goes again; otherwise Bob goes next
+    // Landing may leave the turn in a decision phase, so move it to optional actions first.
+    game = {
+      ...game,
+      currentTurn: { ...game.currentTurn!, phase: 'optional-actions' as const },
+    };
     game = engine.endTurn(game, 'p1');
     const isDoubles = result.roll.isDoubles;
     if (isDoubles) {

@@ -12,6 +12,7 @@ export type ClientEventCallback<E extends ClientEvent> = (
 ) => void;
 
 export const SERVER_EVENTS: Record<ServerEvent, string> = {
+  'session:issued': 'session:issued',
   'lobby:created': 'lobby:created',
   'lobby:joined': 'lobby:joined',
   'lobby:left': 'lobby:left',
@@ -46,6 +47,7 @@ export const CLIENT_EVENTS: Record<ClientEvent, string> = {
   'lobby:update-settings': 'lobby:update-settings',
   'game:roll-dice': 'game:roll-dice',
   'game:buy-property': 'game:buy-property',
+  'game:decline-property': 'game:decline-property',
   'game:pay-tax-flat': 'game:pay-tax-flat',
   'game:pay-tax-percentage': 'game:pay-tax-percentage',
   'game:pass-auction': 'game:pass-auction',

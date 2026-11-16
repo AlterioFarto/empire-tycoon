@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore.js';
 import { useSocket, emitEvent } from '../hooks/useSocket.js';
@@ -6,31 +6,34 @@ import { Board } from '../components/Board.js';
 import { PlayerList } from '../components/PlayerList.js';
 import { DiceRollDisplay } from '../components/DiceRoll.js';
 import { Chat } from '../components/Chat.js';
+import {
+  OnlineAuctionPanel,
+  OnlineCardModal,
+  OnlinePropertyManager,
+  OnlineTradePanel,
+} from '../components/OnlineGamePanels.js';
+
+type ActivePanel = 'properties' | 'trade' | null;
 
 export function GamePage() {
-  useParams<{ id: string }>();
-  useSocket();
+  const { id } = useParams<{ id: string }>();
+  useSocket(id);
+
+  const [activePanel, setActivePanel] = useState<ActivePanel>(null);
 
   const game = useGameStore((s) => s.game);
   const playerId = useGameStore((s) => s.playerId);
   const lastRoll = useGameStore((s) => s.lastRoll);
+  const lastDrawnCard = useGameStore((s) => s.lastDrawnCard);
   const error = useGameStore((s) => s.error);
   const setLastRoll = useGameStore((s) => s.setLastRoll);
+  const setLastDrawnCard = useGameStore((s) => s.setLastDrawnCard);
 
-  // Clear dice display when turn changes (avoids showing previous player's roll)
+  // Clear roll and card display when turn changes (avoids showing previous player's result)
   useEffect(() => {
     setLastRoll(null);
-  }, [game?.currentTurn?.playerId, setLastRoll]);
-
-  useEffect(() => {
-    if (!game) return;
-    if (game.winnerId) {
-      const winner = game.players.find((p) => p.id === game.winnerId);
-      if (winner) {
-        // Show win message
-      }
-    }
-  }, [game?.winnerId]);
+    setLastDrawnCard(null);
+  }, [game?.currentTurn?.playerId, setLastRoll, setLastDrawnCard]);
 
   if (!game) {
     return (
@@ -49,25 +52,26 @@ export function GamePage() {
   const canRoll = isMyTurn && currentPhase === 'waiting-to-roll';
   const canEndTurn = isMyTurn && (currentPhase === 'optional-actions' || currentPhase === 'end-turn');
   const isDecidingTax = isMyTurn && currentPhase === 'deciding-tax';
+  const winner = game.winnerId ? game.players.find((p) => p.id === game.winnerId) : null;
 
   function handleRollDice() {
-    emitEvent('game:roll-dice', {});
+    emitEvent('game:roll-dice');
   }
 
   function handleBuyProperty() {
-    emitEvent('game:buy-property', {});
+    emitEvent('game:buy-property');
   }
 
   function handleEndTurn() {
-    emitEvent('game:end-turn', {});
+    emitEvent('game:end-turn');
   }
 
   function handlePayJail() {
-    emitEvent('game:pay-jail-fine', {});
+    emitEvent('game:pay-jail-fine');
   }
 
   function handleUseJailCard() {
-    emitEvent('game:use-jail-card', {});
+    emitEvent('game:use-jail-card');
   }
 
   return (
@@ -75,6 +79,12 @@ export function GamePage() {
       {error && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-red-900/80 text-red-200 px-6 py-3 rounded-lg z-50 border border-red-700">
           {error}
+        </div>
+      )}
+
+      {winner && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-yellow-900/90 text-yellow-100 px-6 py-3 rounded-lg z-50 border border-yellow-600">
+          {winner.name} wins!
         </div>
       )}
 
@@ -106,6 +116,9 @@ export function GamePage() {
             />
           </div>
 
+          {/* Auction */}
+          <OnlineAuctionPanel game={game} playerId={playerId} />
+
           {/* Action bar */}
           <div className="bg-gray-800 rounded-lg p-4 flex flex-wrap items-center gap-4">
             <DiceRollDisplay
@@ -120,13 +133,13 @@ export function GamePage() {
               <>
                 <button
                   className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm"
-                  onClick={() => emitEvent('game:pay-tax-flat', {})}
+                  onClick={() => emitEvent('game:pay-tax-flat')}
                 >
                   Pay $200 Flat
                 </button>
                 <button
                   className="bg-yellow-600 hover:bg-yellow-700 text-white font-semibold py-2 px-4 rounded-lg transition text-sm"
-                  onClick={() => emitEvent('game:pay-tax-percentage', {})}
+                  onClick={() => emitEvent('game:pay-tax-percentage')}
                 >
                   Pay 10% (${Math.floor((currentPlayer?.money ?? 0) * 0.1)})
                 </button>
@@ -143,7 +156,7 @@ export function GamePage() {
                 </button>
                 <button
                   className="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-lg transition"
-                  onClick={() => emitEvent('game:pass-auction', {})}
+                  onClick={() => emitEvent('game:decline-property')}
                 >
                   Auction
                 </button>
@@ -166,12 +179,29 @@ export function GamePage() {
                 </button>
                 <button
                   className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition"
-                  onClick={handleRollDice}
+                  onClick={() => emitEvent('game:roll-for-jail')}
                 >
                   Roll for Doubles
                 </button>
               </>
             )}
+
+            <button
+              className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition text-sm"
+              onClick={() => setActivePanel('properties')}
+            >
+              Manage Properties
+            </button>
+
+            <button
+              className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition text-sm"
+              onClick={() => setActivePanel('trade')}
+            >
+              Trade
+              {game.tradeOffer && game.tradeOffer.toPlayerId === playerId && (
+                <span className="ml-2 inline-block w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
+              )}
+            </button>
 
             {canEndTurn && (
               <button
@@ -206,12 +236,15 @@ export function GamePage() {
 
           {/* Pending trade notification */}
           {game.tradeOffer && game.tradeOffer.toPlayerId === playerId && (
-            <div className="bg-gray-800 rounded-lg p-4 border border-yellow-700/50">
+            <button
+              className="w-full text-left bg-gray-800 rounded-lg p-4 border border-yellow-700/50 hover:bg-gray-700 transition"
+              onClick={() => setActivePanel('trade')}
+            >
               <div className="flex items-center gap-2 text-yellow-400 text-sm font-semibold">
                 <span className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
                 Incoming Trade Offer!
               </div>
-            </div>
+            </button>
           )}
 
           {/* Game log */}
@@ -227,6 +260,22 @@ export function GamePage() {
           </div>
         </div>
       </div>
+
+      <OnlinePropertyManager
+        game={game}
+        playerId={playerId}
+        isOpen={activePanel === 'properties'}
+        onClose={() => setActivePanel(null)}
+      />
+
+      <OnlineTradePanel
+        game={game}
+        playerId={playerId}
+        isOpen={activePanel === 'trade'}
+        onClose={() => setActivePanel(null)}
+      />
+
+      <OnlineCardModal card={lastDrawnCard} onClose={() => setLastDrawnCard(null)} />
     </div>
   );
 }

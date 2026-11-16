@@ -1,9 +1,10 @@
 import type {
   GameState, Player, PlayerColor, DiceRoll, PropertyTile, RailroadTile, UtilityTile,
-  Tile, GameSettings, MonopolyCard, GameLogEntry,
+  Tile, GameSettings, MonopolyCard, GameLogEntry, CardAction,
 } from '@monopoly/shared';
 import { DEFAULT_SETTINGS, GO_SALARY, GO_DOUBLE_SALARY,
-  JAIL_FINE, PROPERTY_SETS, MAX_HOUSES_PER_PROPERTY } from '@monopoly/shared';
+  JAIL_FINE, PROPERTY_SETS, MAX_HOUSES_PER_PROPERTY,
+  CHANCE_CARDS, COMMUNITY_CHEST_CARDS } from '@monopoly/shared';
 import { RandomDice } from '../dice/dice.js';
 import { StandardBoard } from '../board/board.js';
 import {
@@ -16,9 +17,10 @@ import {
 } from '../rent/rent.js';
 import {
   addHouse, buildHotel, canBuildHotel, removeHouse, sellHotel, mortgageProperty, unmortgageProperty,
+  isOwnable,
 } from '../property/property.js';
 import {
-  payJailFine, useJailCard, processJailRoll,
+  payJailFine, useJailCard as consumeJailCard, processJailRoll,
 } from '../jail/jail.js';
 import {
   createChanceDeck, createCommunityChestDeck, drawCard, resolveCardAction,
@@ -27,14 +29,29 @@ import { createAuction, placeBid, passOnAuction, getAuctionWinner, isAuctionOver
 import { createTradeOffer } from '../trade/trade.js';
 import {
   createTurnState, setPhase, setDiceRoll, markBoughtProperty, markDrawnCard,
-  setStartPosition, hasThirdDouble,
+  setStartPosition, hasThirdDouble, canEndTurn,
 } from '../turn/turn.js';
 import { createLogEntry } from '../events/game-events.js';
 import { createInitialGameState, updateTileInState, updatePlayerInState } from '../serialization/serialization.js';
 import {
-  canBuyProperty, canBuildOnProperty, canMortgage,
+  canBuyProperty, canBuildOnProperty, canMortgage, canSellBuilding, canTradeProperty,
   hasPlayerWon,
 } from '../rules/rules.js';
+
+interface LandingContext {
+  cardAction?: CardAction;
+}
+
+interface RentContext {
+  rentMultiplier?: number;
+  utilityRoll?: DiceRoll;
+}
+
+interface SettlementResult {
+  game: GameState;
+  paid: number;
+  bankrupt: boolean;
+}
 
 export interface EngineResult {
   game: GameState;
@@ -46,10 +63,10 @@ export interface GameEngine {
   addPlayer(game: GameState, id: string, name: string, color: PlayerColor, isHost?: boolean): GameState;
   startGame(game: GameState): GameState;
   rollDice(game: GameState, playerId: string): { game: GameState; roll: DiceRoll };
-  handleTileLanding(game: GameState, playerId: string): GameState;
+  handleTileLanding(game: GameState, playerId: string, context?: LandingContext): GameState;
   buyProperty(game: GameState, playerId: string): GameState;
   declineProperty(game: GameState, playerId: string): GameState;
-  payRent(game: GameState, playerId: string): GameState;
+  payRent(game: GameState, playerId: string, context?: RentContext): GameState;
   drawCard(game: GameState, playerId: string): { game: GameState; card: MonopolyCard };
   payTax(game: GameState, playerId: string): GameState;
   payTaxFlat(game: GameState, playerId: string): GameState;
@@ -66,9 +83,9 @@ export interface GameEngine {
   placeAuctionBid(game: GameState, playerId: string, amount: number): GameState;
   passAuction(game: GameState, playerId: string): GameState;
   createTrade(game: GameState, fromId: string, toId: string, offer: string[], offerMoney: number, request: string[], requestMoney: number): GameState;
-  acceptTrade(game: GameState): GameState;
-  rejectTrade(game: GameState): GameState;
-  cancelTrade(game: GameState): GameState;
+  acceptTrade(game: GameState, playerId: string): GameState;
+  rejectTrade(game: GameState, playerId: string): GameState;
+  cancelTrade(game: GameState, playerId: string): GameState;
   endTurn(game: GameState, playerId: string): GameState;
   getNextPlayer(game: GameState): GameState;
   declareWinner(game: GameState): GameState;
@@ -187,9 +204,9 @@ export class MonopolyEngine implements GameEngine {
     return game.tiles[position] ?? this.board.getTile(position);
   }
 
-  handleTileLanding(game: GameState, playerId: string): GameState {
+  handleTileLanding(game: GameState, playerId: string, context?: LandingContext): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) return game;
 
     const tile = this.getTileAt(game, player.position);
     let turn = setPhase(game.currentTurn, 'resolving-tile');
@@ -203,7 +220,14 @@ export class MonopolyEngine implements GameEngine {
           return { ...game, currentTurn: turn };
         }
         if (tile.ownerId !== playerId) {
-          return this.payRent({ ...game, currentTurn: turn }, playerId);
+          const rentContext: RentContext = {};
+          if (context?.cardAction === 'advance-to-nearest-railroad') {
+            rentContext.rentMultiplier = 2;
+          }
+          if (context?.cardAction === 'advance-to-nearest-utility') {
+            rentContext.utilityRoll = this.dice.roll();
+          }
+          return this.payRent({ ...game, currentTurn: turn }, playerId, rentContext);
         }
         turn = setPhase(turn, 'optional-actions');
         return { ...game, currentTurn: turn };
@@ -227,7 +251,7 @@ export class MonopolyEngine implements GameEngine {
       case 'free-parking':
         if (game.settings.freeParkingJackpot && game.freeParkingMoney > 0) {
           const jackpot = game.freeParkingMoney;
-          let updatedPlayer = addMoney(player, jackpot);
+          const updatedPlayer = addMoney(player, jackpot);
           const log = createLogEntry('collect', playerId, `${player.name} landed on Free Parking and collected $${jackpot} jackpot!`, { amount: jackpot });
           turn = setPhase(turn, 'optional-actions');
           return {
@@ -245,7 +269,8 @@ export class MonopolyEngine implements GameEngine {
 
   buyProperty(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId
+      || game.currentTurn.phase !== 'deciding-buy') return game;
 
     const tile = this.getTileAt(game, player.position);
     if (tile.type !== 'property' && tile.type !== 'railroad' && tile.type !== 'utility') return game;
@@ -293,23 +318,56 @@ export class MonopolyEngine implements GameEngine {
 
   declineProperty(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId
+      || game.currentTurn.phase !== 'deciding-buy') return game;
 
     const tile = this.getTileAt(game, player.position);
     if (tile.type !== 'property' && tile.type !== 'railroad' && tile.type !== 'utility') return game;
     if (tile.ownerId) return game;
 
     if (game.settings.noAuctions) {
-      let turn = setPhase(game.currentTurn, 'optional-actions');
+      const turn = setPhase(game.currentTurn, 'optional-actions');
       return { ...game, currentTurn: turn };
     }
 
     return this.startAuction(game, tile.id);
   }
 
-    payRent(game: GameState, playerId: string): GameState {
+  private settleDebt(
+    game: GameState,
+    payerId: string,
+    amount: number,
+    creditorId?: string,
+  ): SettlementResult {
+    const payer = game.players.find(p => p.id === payerId);
+    if (!payer || amount <= 0) {
+      return { game, paid: 0, bankrupt: false };
+    }
+
+    const paid = Math.max(0, Math.min(amount, payer.money));
+    let players = updatePlayerInState(game.players, deductMoney(payer, paid));
+    if (creditorId && paid > 0) {
+      const creditor = players.find(p => p.id === creditorId);
+      if (creditor) {
+        players = updatePlayerInState(players, addMoney(creditor, paid));
+      }
+    }
+
+    const settledGame: GameState = { ...game, players };
+    if (paid < amount) {
+      return {
+        game: this.handleBankruptcy(settledGame, payerId, creditorId),
+        paid,
+        bankrupt: true,
+      };
+    }
+
+    return { game: settledGame, paid, bankrupt: false };
+  }
+
+  payRent(game: GameState, playerId: string, context?: RentContext): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) return game;
 
     const tile = this.getTileAt(game, player.position);
     if (tile.type !== 'property' && tile.type !== 'railroad' && tile.type !== 'utility') return game;
@@ -337,7 +395,7 @@ export class MonopolyEngine implements GameEngine {
         const ownedRRs = game.tiles.filter(t =>
           t.type === 'railroad' && t.ownerId === owner.id
         ).length;
-        rent = calculateRailroadRent(rrTile, ownedRRs);
+        rent = calculateRailroadRent(rrTile, ownedRRs) * (context?.rentMultiplier ?? 1);
         break;
       }
       case 'utility': {
@@ -345,9 +403,11 @@ export class MonopolyEngine implements GameEngine {
         const ownedUtils = game.tiles.filter(t =>
           t.type === 'utility' && t.ownerId === owner.id
         ).length;
-        const roll = game.currentTurn.diceRoll;
+        const roll = context?.utilityRoll ?? game.currentTurn.diceRoll;
         if (!roll) return game;
-        rent = calculateUtilityRent(utilTile, ownedUtils, roll);
+        rent = context?.utilityRoll
+          ? calculateUtilityRent(utilTile, 2, roll)
+          : calculateUtilityRent(utilTile, ownedUtils, roll);
         break;
       }
     }
@@ -357,41 +417,30 @@ export class MonopolyEngine implements GameEngine {
       return { ...game, currentTurn: turn };
     }
 
-    let actualPaid = Math.min(rent, player.money);
-    let updatedPlayer = deductMoney(player, actualPaid);
-    let updatedOwner = addMoney(owner, actualPaid);
+    const settlement = this.settleDebt(game, playerId, rent, owner.id);
+    const actualPaid = settlement.paid;
+    const log = createLogEntry(
+      'pay',
+      playerId,
+      `${player.name} paid $${actualPaid} rent to ${owner.name}.${actualPaid < rent ? ` Still owes $${rent - actualPaid}.` : ''}`,
+      { amount: actualPaid, ownerId: owner.id },
+    );
+    const settledGame: GameState = {
+      ...settlement.game,
+      logs: [...settlement.game.logs, log],
+    };
 
-    const log = createLogEntry('pay', playerId, `${player.name} paid $${actualPaid} rent to ${owner.name}.${actualPaid < rent ? ` Still owes $${rent - actualPaid}.` : ''}`, { amount: actualPaid, ownerId: owner.id });
-
-    if (actualPaid < rent) {
-      let gameAfterDebt: GameState = {
-        ...game,
-        players: updatePlayerInState(
-          updatePlayerInState(game.players, updatedPlayer),
-          updatedOwner,
-        ),
-        currentTurn: game.currentTurn,
-        logs: [...game.logs, log],
-      };
-      return this.handleBankruptcy(gameAfterDebt, playerId, owner.id);
-    }
-
-    let turn = setPhase(game.currentTurn, 'optional-actions');
+    if (settlement.bankrupt) return settledGame;
 
     return {
-      ...game,
-      players: updatePlayerInState(
-        updatePlayerInState(game.players, updatedPlayer),
-        updatedOwner,
-      ),
-      currentTurn: turn,
-      logs: [...game.logs, log],
+      ...settledGame,
+      currentTurn: setPhase(settledGame.currentTurn!, 'optional-actions'),
     };
   }
 
   drawCard(game: GameState, playerId: string): { game: GameState; card: MonopolyCard } {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) {
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) {
       return { game, card: {} as MonopolyCard };
     }
 
@@ -403,7 +452,9 @@ export class MonopolyEngine implements GameEngine {
     const drawn = drawCard({ cards: deck, discardPile: discardSource });
     const card = drawn.card;
     const newDeckCards = drawn.deck.cards;
-    const newDiscard = [...drawn.deck.discardPile, card];
+    const keepCard = card.action === 'get-out-of-jail-free';
+    // A held jail card stays out of the discard pile so recycling cannot duplicate it.
+    const newDiscard = keepCard ? drawn.deck.discardPile : [...drawn.deck.discardPile, card];
     const deckUpdate = isChance
       ? { chanceDeck: newDeckCards, chanceDiscard: newDiscard }
       : { communityChestDeck: newDeckCards, communityChestDiscard: newDiscard };
@@ -418,74 +469,93 @@ export class MonopolyEngine implements GameEngine {
     const otherPlayers = game.players.filter(p => p.id !== playerId);
     const resolution = resolveCardAction(card, player, otherPlayers, this.board.getSize(), propertyTileMap);
 
-    // Handle collect-from-each-player and pay-each-player
-    let updatedPlayers = updatePlayerInState(game.players, resolution.player);
-    if (card.action === 'pay-each-player' || card.action === 'elected-chairman') {
+    const payEach = card.action === 'pay-each-player' || card.action === 'elected-chairman';
+    const collectEach = card.action === 'collect-from-each-player'
+      || card.action === 'holiday-fund' || card.action === 'birthday';
+    const usesSettlement = payEach || collectEach || !!resolution.paidMoney;
+
+    let resolvedPlayer = usesSettlement
+      ? { ...resolution.player, money: player.money }
+      : resolution.player;
+    if (keepCard) {
+      resolvedPlayer = {
+        ...resolvedPlayer,
+        heldJailCardIds: [...(resolvedPlayer.heldJailCardIds ?? []), card.id],
+      };
+    }
+
+    let workingGame: GameState = {
+      ...game,
+      players: updatePlayerInState(game.players, resolvedPlayer),
+      ...deckUpdate,
+    };
+    let bankrupt = false;
+
+    if (payEach) {
       const amount = card.value ?? 50;
-      for (const p of game.players) {
-        if (p.id !== playerId && !p.bankrupt) {
-          updatedPlayers = updatePlayerInState(updatedPlayers, addMoney(p, amount));
+      const recipients = workingGame.players.filter(p => p.id !== playerId && !p.bankrupt);
+      const settlement = this.settleDebt(workingGame, playerId, amount * recipients.length);
+      workingGame = settlement.game;
+      bankrupt = settlement.bankrupt;
+      if (!bankrupt) {
+        let players = workingGame.players;
+        for (const recipient of recipients) {
+          const current = players.find(p => p.id === recipient.id);
+          if (current && !current.bankrupt) {
+            players = updatePlayerInState(players, addMoney(current, amount));
+          }
+        }
+        workingGame = { ...workingGame, players };
+      }
+    } else if (collectEach) {
+      const amount = card.value ?? 50;
+      for (const payer of game.players) {
+        if (payer.id === playerId || payer.bankrupt) continue;
+        const settlement = this.settleDebt(workingGame, payer.id, amount, playerId);
+        workingGame = settlement.game;
+        if (settlement.bankrupt) {
+          bankrupt = true;
+          break;
         }
       }
+    } else if (resolution.paidMoney && resolution.paidMoney > 0) {
+      const settlement = this.settleDebt(workingGame, playerId, resolution.paidMoney);
+      workingGame = settlement.game;
+      bankrupt = settlement.bankrupt;
     }
-    if (card.action === 'collect-from-each-player' || card.action === 'holiday-fund' || card.action === 'birthday') {
-      const amount = card.value ?? 50;
-      for (const p of game.players) {
-        if (p.id !== playerId && !p.bankrupt) {
-          updatedPlayers = updatePlayerInState(updatedPlayers, deductMoney(p, amount));
-        }
-      }
-    }
+
+    const log = createLogEntry('card', playerId, resolution.log, { card });
+    const loggedGame: GameState = {
+      ...workingGame,
+      logs: [...workingGame.logs, log],
+    };
+
+    if (bankrupt) return { game: loggedGame, card };
 
     let turn = markDrawnCard(game.currentTurn);
     turn = setPhase(turn, 'optional-actions');
 
-    // Handle jail cards being kept
-    if (card.action === 'get-out-of-jail-free') {
-      return {
-        game: {
-          ...game,
-          players: updatedPlayers,
-          ...deckUpdate,
-          currentTurn: turn,
-          logs: [...game.logs, createLogEntry('card', playerId, resolution.log, { card })],
-        },
-        card,
-      };
+    // A held jail card is already tracked on the player and removed from the deck.
+    if (keepCard) {
+      return { game: { ...loggedGame, currentTurn: turn }, card };
     }
 
-    const log = createLogEntry('card', playerId, resolution.log, { card });
-
-    // If the card moved the player (advance-to or go-back-3), process the destination tile
+    // If the card moved the player (advance-to or go-back-3), process the destination tile.
     if (resolution.newPosition != null) {
       const movedGame = this.handleTileLanding(
-        {
-          ...game,
-          players: updatedPlayers,
-          ...deckUpdate,
-          currentTurn: turn,
-          logs: [...game.logs, log],
-        },
+        { ...loggedGame, currentTurn: turn },
         playerId,
+        { cardAction: card.action },
       );
       return { game: movedGame, card };
     }
 
-    return {
-      game: {
-        ...game,
-        players: updatedPlayers,
-        ...deckUpdate,
-        currentTurn: turn,
-        logs: [...game.logs, log],
-      },
-      card,
-    };
+    return { game: { ...loggedGame, currentTurn: turn }, card };
   }
 
   payTax(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) return game;
 
     const tile = this.board.getTile(player.position);
     if (tile.type !== 'tax') return game;
@@ -494,7 +564,7 @@ export class MonopolyEngine implements GameEngine {
 
     // Income Tax gives player a choice; Luxury Tax is auto-paid
     if (taxTile.percentage && taxTile.percentage > 0) {
-      let turn = setPhase(game.currentTurn, 'deciding-tax');
+      const turn = setPhase(game.currentTurn, 'deciding-tax');
       return {
         ...game,
         currentTurn: turn,
@@ -502,91 +572,71 @@ export class MonopolyEngine implements GameEngine {
       };
     }
 
-    let updatedPlayer = deductMoney(player, taxTile.amount);
-
-    if (updatedPlayer.money < 0) {
-      if (updatedPlayer.money < -taxTile.amount) {
-        return game; // Cannot afford tax
-      }
-      updatedPlayer = { ...updatedPlayer, money: 0 };
-    }
-
-    const actuallyPaid = taxTile.amount;
-    let freeParkingMoney = game.freeParkingMoney;
-    if (game.settings.freeParkingJackpot) {
-      freeParkingMoney += actuallyPaid;
-    }
-
-    let turn = setPhase(game.currentTurn, 'optional-actions');
-
-    return {
-      ...game,
-      players: updatePlayerInState(game.players, updatedPlayer),
+    const settlement = this.settleDebt(game, playerId, taxTile.amount);
+    const actuallyPaid = settlement.paid;
+    const freeParkingMoney = game.freeParkingMoney
+      + (game.settings.freeParkingJackpot ? actuallyPaid : 0);
+    const log = createLogEntry('pay', playerId, `${player.name} paid $${actuallyPaid} in taxes.`, { amount: actuallyPaid });
+    const taxedGame: GameState = {
+      ...settlement.game,
       freeParkingMoney,
-      currentTurn: turn,
-      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${actuallyPaid} in taxes.`, { amount: actuallyPaid })],
+      logs: [...settlement.game.logs, log],
     };
+
+    if (settlement.bankrupt) return taxedGame;
+    return { ...taxedGame, currentTurn: setPhase(taxedGame.currentTurn!, 'optional-actions') };
   }
 
   payTaxFlat(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId
+      || game.currentTurn.phase !== 'deciding-tax') return game;
 
     const tile = this.board.getTile(player.position);
     if (tile.type !== 'tax') return game;
 
     const taxTile = tile as import('@monopoly/shared').TaxTile;
-    const taxAmount = taxTile.amount;
-    if (player.money < taxAmount) return game;
-    let updatedPlayer = deductMoney(player, taxAmount);
-
-    let freeParkingMoney = game.freeParkingMoney;
-    if (game.settings.freeParkingJackpot) {
-      freeParkingMoney += taxAmount;
-    }
-
-    let turn = setPhase(game.currentTurn, 'optional-actions');
-
-    return {
-      ...game,
-      players: updatePlayerInState(game.players, updatedPlayer),
+    const settlement = this.settleDebt(game, playerId, taxTile.amount);
+    const freeParkingMoney = game.freeParkingMoney
+      + (game.settings.freeParkingJackpot ? settlement.paid : 0);
+    const log = createLogEntry('pay', playerId, `${player.name} paid $${settlement.paid} flat Income Tax.`, { amount: settlement.paid });
+    const taxedGame: GameState = {
+      ...settlement.game,
       freeParkingMoney,
-      currentTurn: turn,
-      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${taxAmount} flat Income Tax.`, { amount: taxAmount })],
+      logs: [...settlement.game.logs, log],
     };
+
+    if (settlement.bankrupt) return taxedGame;
+    return { ...taxedGame, currentTurn: setPhase(taxedGame.currentTurn!, 'optional-actions') };
   }
 
   payTaxPercentage(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId
+      || game.currentTurn.phase !== 'deciding-tax') return game;
 
     const tile = this.board.getTile(player.position);
     if (tile.type !== 'tax') return game;
 
     const taxTile = tile as import('@monopoly/shared').TaxTile;
     const percentageAmount = Math.floor(player.money * ((taxTile.percentage ?? 10) / 100));
-    if (player.money < percentageAmount) return game;
-    let updatedPlayer = deductMoney(player, percentageAmount);
-
-    let freeParkingMoney = game.freeParkingMoney;
-    if (game.settings.freeParkingJackpot) {
-      freeParkingMoney += percentageAmount;
-    }
-
-    let turn = setPhase(game.currentTurn, 'optional-actions');
-
-    return {
-      ...game,
-      players: updatePlayerInState(game.players, updatedPlayer),
+    const settlement = this.settleDebt(game, playerId, percentageAmount);
+    const freeParkingMoney = game.freeParkingMoney
+      + (game.settings.freeParkingJackpot ? settlement.paid : 0);
+    const log = createLogEntry('pay', playerId, `${player.name} paid $${settlement.paid} (${taxTile.percentage}%) Income Tax.`, { amount: settlement.paid });
+    const taxedGame: GameState = {
+      ...settlement.game,
       freeParkingMoney,
-      currentTurn: turn,
-      logs: [...game.logs, createLogEntry('pay', playerId, `${player.name} paid $${percentageAmount} (${taxTile.percentage}%) Income Tax.`, { amount: percentageAmount })],
+      logs: [...settlement.game.logs, log],
     };
+
+    if (settlement.bankrupt) return taxedGame;
+    return { ...taxedGame, currentTurn: setPhase(taxedGame.currentTurn!, 'optional-actions') };
   }
 
   goToJail(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) return game;
 
     const jailedPlayer = sendToJail(player);
 
@@ -604,11 +654,11 @@ export class MonopolyEngine implements GameEngine {
 
   payJail(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) return game;
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) return game;
     if (!player.inJail || game.currentTurn.phase !== 'jail-options' || player.money < JAIL_FINE) return game;
 
     const releasedPlayer = payJailFine(player);
-    let turn = setPhase(game.currentTurn, 'waiting-to-roll');
+    const turn = setPhase(game.currentTurn, 'waiting-to-roll');
 
     return {
       ...game,
@@ -621,14 +671,25 @@ export class MonopolyEngine implements GameEngine {
   useGetOutOfJail(game: GameState, playerId: string): GameState {
     const player = game.players.find(p => p.id === playerId);
     if (!player || player.getOutOfJailCards <= 0 || !game.currentTurn) return game;
+    if (game.currentTurn.playerId !== playerId) return game;
     if (!player.inJail || game.currentTurn.phase !== 'jail-options') return game;
 
-    const releasedPlayer = useJailCard(player);
-    let turn = setPhase(game.currentTurn, 'waiting-to-roll');
+    const releasedPlayer = consumeJailCard(player);
+    const heldCardIds = player.heldJailCardIds ?? [];
+    const cardId = heldCardIds[0];
+    const returnedCard = cardId
+      ? CHANCE_CARDS.find(card => card.id === cardId) ?? COMMUNITY_CHEST_CARDS.find(card => card.id === cardId)
+      : undefined;
+    const updatedPlayer = { ...releasedPlayer, heldJailCardIds: heldCardIds.slice(1) };
+    const turn = setPhase(game.currentTurn, 'waiting-to-roll');
 
     return {
       ...game,
-      players: updatePlayerInState(game.players, releasedPlayer),
+      players: updatePlayerInState(game.players, updatedPlayer),
+      chanceDeck: returnedCard?.type === 'chance' ? [...game.chanceDeck, returnedCard] : game.chanceDeck,
+      communityChestDeck: returnedCard?.type === 'community-chest'
+        ? [...game.communityChestDeck, returnedCard]
+        : game.communityChestDeck,
       currentTurn: turn,
       logs: [...game.logs, createLogEntry('jail', playerId, `${player.name} used a Get Out of Jail Free card.`, {})],
     };
@@ -636,7 +697,7 @@ export class MonopolyEngine implements GameEngine {
 
   rollForJail(game: GameState, playerId: string): { game: GameState; roll: DiceRoll } {
     const player = game.players.find(p => p.id === playerId);
-    if (!player || !game.currentTurn) {
+    if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) {
       return { game, roll: { die1: 0, die2: 0, isDoubles: false, total: 0 } };
     }
 
@@ -709,7 +770,7 @@ export class MonopolyEngine implements GameEngine {
     let updatedTiles = [...game.tiles];
     let updatedHousesRemaining = game.housesRemaining;
     let updatedHotelsRemaining = game.hotelsRemaining;
-    let updatedPlayer = deductMoney(player, property.houseCost);
+    const updatedPlayer = deductMoney(player, property.houseCost);
     let logMessage: string;
 
     if (canBuildHotel(property, player.money, property.houseCost) && game.hotelsRemaining > 0) {
@@ -746,6 +807,12 @@ export class MonopolyEngine implements GameEngine {
     if (!tile.ownerId || tile.ownerId !== playerId) return game;
 
     const property = tile as PropertyTile;
+    const groupProperties = (PROPERTY_SETS[property.color] ?? [])
+      .map(pid => game.tiles.find(t => t.id === pid && t.type === 'property'))
+      .filter((t): t is PropertyTile => t !== undefined && t.type === 'property');
+
+    const check = canSellBuilding(property, player, groupProperties);
+    if (!check.allowed) return game;
 
     let updatedTiles = [...game.tiles];
     let updatedHousesRemaining = game.housesRemaining;
@@ -753,10 +820,12 @@ export class MonopolyEngine implements GameEngine {
     let refundAmount: number;
 
     if (property.isHotel) {
+      // Downgrading a hotel must take four houses back out of the bank.
+      if (updatedHousesRemaining < MAX_HOUSES_PER_PROPERTY) return game;
       const withoutHotel = sellHotel(property);
       updatedTiles = updateTileInState(updatedTiles, withoutHotel);
-      // Houses already returned on hotel build, no double-count on sell
       updatedHotelsRemaining += 1;
+      updatedHousesRemaining -= MAX_HOUSES_PER_PROPERTY;
       refundAmount = Math.floor((property.houseCost * (MAX_HOUSES_PER_PROPERTY + 1)) / 2);
     } else if (property.houses > 0) {
       const withLessHouses = removeHouse(property);
@@ -837,10 +906,12 @@ export class MonopolyEngine implements GameEngine {
   startAuction(game: GameState, propertyId: string): GameState {
     const activePlayers = game.players.filter(p => !p.bankrupt).map(p => p.id);
     const auction = createAuction(propertyId, activePlayers);
+    const turn = game.currentTurn ? setPhase(game.currentTurn, 'auction') : null;
 
     return {
       ...game,
       auction,
+      currentTurn: turn,
       logs: [...game.logs, createLogEntry('auction', null, `Auction started for ${game.tiles.find(t => t.id === propertyId)?.name ?? 'property'}.`, { propertyId })],
     };
   }
@@ -862,35 +933,39 @@ export class MonopolyEngine implements GameEngine {
     if (!game.auction || !game.auction.active) return game;
 
     const newAuction = passOnAuction(game.auction, playerId);
+    const passLog = createLogEntry('auction', playerId, `${game.players.find(p => p.id === playerId)?.name ?? 'Player'} passed on auction.`, { playerId });
 
     if (isAuctionOver(newAuction)) {
       const { winnerId, amount } = getAuctionWinner(newAuction);
+      const turn = game.currentTurn ? setPhase(game.currentTurn, 'optional-actions') : null;
+      const result: GameState = {
+        ...game,
+        auction: null,
+        currentTurn: turn,
+        logs: [...game.logs, passLog],
+      };
       if (winnerId && amount > 0) {
-        const result: GameState = { ...game, auction: { ...newAuction, active: false } };
         const tile = result.tiles.find(t => t.id === newAuction.propertyId);
-        if (tile && (tile.type === 'property' || tile.type === 'railroad' || tile.type === 'utility')) {
-          const ownable = tile as PropertyTile | RailroadTile | UtilityTile;
+        if (tile && isOwnable(tile)) {
           const winner = result.players.find(p => p.id === winnerId);
           if (winner && winner.money >= amount) {
             const updatedWinner = addProperty(deductMoney(winner, amount), tile.id);
             return {
               ...result,
-              tiles: updateTileInState(result.tiles, { ...ownable, ownerId: winnerId }),
-              auction: null,
+              tiles: updateTileInState(result.tiles, { ...tile, ownerId: winnerId }),
               players: updatePlayerInState(result.players, updatedWinner),
               logs: [...result.logs, createLogEntry('auction', winnerId, `${winner.name} won ${tile.name} for $${amount}.`, { propertyId: tile.id, amount })],
-            } as GameState;
+            };
           }
         }
-        return result;
       }
-      return { ...game, auction: { ...newAuction, active: false } };
+      return result;
     }
 
     return {
       ...game,
       auction: newAuction,
-      logs: [...game.logs, createLogEntry('auction', playerId, `${game.players.find(p => p.id === playerId)?.name ?? 'Player'} passed on auction.`, { playerId })],
+      logs: [...game.logs, passLog],
     };
   }
 
@@ -903,6 +978,8 @@ export class MonopolyEngine implements GameEngine {
     request: string[],
     requestMoney: number,
   ): GameState {
+    if (fromId === toId) return game;
+    if (!game.players.some(p => p.id === fromId) || !game.players.some(p => p.id === toId)) return game;
     const tradeOffer = createTradeOffer(fromId, toId, offer, offerMoney, request, requestMoney);
     return {
       ...game,
@@ -911,25 +988,28 @@ export class MonopolyEngine implements GameEngine {
     };
   }
 
-  acceptTrade(game: GameState): GameState {
+  acceptTrade(game: GameState, playerId: string): GameState {
     if (!game.tradeOffer || game.tradeOffer.status !== 'pending') return game;
+    if (game.tradeOffer.toPlayerId !== playerId) return game;
 
     const offer = game.tradeOffer;
     let updatedPlayers = [...game.players];
-    let updatedTiles = [...game.tiles];
-
-    // Validate ownership and funds
-    if (!offer.offerProperties.every(propId => {
-      const tile = updatedTiles.find(t => t.id === propId);
-      return tile && (tile.type === 'property' || tile.type === 'railroad' || tile.type === 'utility') && tile.ownerId === offer.fromPlayerId;
-    })) return game;
-    if (!offer.requestProperties.every(propId => {
-      const tile = updatedTiles.find(t => t.id === propId);
-      return tile && (tile.type === 'property' || tile.type === 'railroad' || tile.type === 'utility') && tile.ownerId === offer.toPlayerId;
-    })) return game;
+    const updatedTiles = [...game.tiles];
     const fromPlayer = updatedPlayers.find(p => p.id === offer.fromPlayerId);
     const toPlayer = updatedPlayers.find(p => p.id === offer.toPlayerId);
     if (!fromPlayer || !toPlayer) return game;
+
+    // Validate ownership, buildings, and funds
+    if (!offer.offerProperties.every(propId => {
+      const tile = updatedTiles.find(t => t.id === propId);
+      return tile !== undefined && isOwnable(tile) && tile.ownerId === offer.fromPlayerId
+        && canTradeProperty(tile, fromPlayer).allowed;
+    })) return game;
+    if (!offer.requestProperties.every(propId => {
+      const tile = updatedTiles.find(t => t.id === propId);
+      return tile !== undefined && isOwnable(tile) && tile.ownerId === offer.toPlayerId
+        && canTradeProperty(tile, toPlayer).allowed;
+    })) return game;
     if (fromPlayer.money < offer.offerMoney) return game;
     if (toPlayer.money < offer.requestMoney) return game;
 
@@ -999,8 +1079,8 @@ export class MonopolyEngine implements GameEngine {
     };
   }
 
-  rejectTrade(game: GameState): GameState {
-    if (!game.tradeOffer) return game;
+  rejectTrade(game: GameState, playerId: string): GameState {
+    if (!game.tradeOffer || game.tradeOffer.toPlayerId !== playerId) return game;
     return {
       ...game,
       tradeOffer: null,
@@ -1008,8 +1088,8 @@ export class MonopolyEngine implements GameEngine {
     };
   }
 
-  cancelTrade(game: GameState): GameState {
-    if (!game.tradeOffer) return game;
+  cancelTrade(game: GameState, playerId: string): GameState {
+    if (!game.tradeOffer || game.tradeOffer.fromPlayerId !== playerId) return game;
     return {
       ...game,
       tradeOffer: null,
@@ -1022,6 +1102,7 @@ export class MonopolyEngine implements GameEngine {
     if (!player || !game.currentTurn || game.currentTurn.playerId !== playerId) return game;
 
     const turn = game.currentTurn;
+    if (!canEndTurn(turn)) return game;
 
     // If rolled doubles (and not the third double, and not released from jail) go again
     if (turn.diceRoll?.isDoubles && turn.doublesCount < 3 && !player.inJail && !turn.jailRelease) {
@@ -1083,29 +1164,46 @@ export class MonopolyEngine implements GameEngine {
     const player = game.players.find(p => p.id === playerId);
     if (!player) return game;
 
-    let updatedPlayer = setBankrupt(player);
-    let updatedTiles = [...game.tiles];
+    const updatedPlayer = setBankrupt(player);
+    const updatedTiles = [...game.tiles];
     let updatedPlayers = updatePlayerInState(game.players, { ...updatedPlayer, money: 0, properties: [] });
+    let updatedHousesRemaining = game.housesRemaining;
+    let updatedHotelsRemaining = game.hotelsRemaining;
 
-    // Transfer all properties to creditor (if rent debt) or back to bank
+    // Buildings are sold back to the bank before properties are transferred.
     for (const propId of player.properties) {
       const tileIdx = updatedTiles.findIndex(t => t.id === propId);
       if (tileIdx !== -1) {
         const tile = updatedTiles[tileIdx]!;
-        if (tile.type === 'property' || tile.type === 'railroad' || tile.type === 'utility') {
-          if (creditorId) {
-            updatedTiles[tileIdx] = { ...tile, ownerId: creditorId, isMortgaged: tile.isMortgaged } as typeof tile;
-            const creditor = updatedPlayers.find(p => p.id === creditorId);
-            if (creditor) {
-              updatedPlayers = updatePlayerInState(updatedPlayers, addProperty(creditor, propId));
-            }
-          } else {
-            updatedTiles[tileIdx] = { ...tile, ownerId: null, isMortgaged: false } as typeof tile;
+        if (!isOwnable(tile)) continue;
+
+        let cleanTile = tile;
+        if (tile.type === 'property') {
+          if (tile.isHotel) {
+            updatedHotelsRemaining += 1;
+            cleanTile = { ...tile, houses: 0, isHotel: false };
+          } else if (tile.houses > 0) {
+            updatedHousesRemaining += tile.houses;
+            cleanTile = { ...tile, houses: 0 };
           }
+        }
+
+        if (creditorId) {
+          updatedTiles[tileIdx] = { ...cleanTile, ownerId: creditorId } as typeof tile;
+          const creditor = updatedPlayers.find(p => p.id === creditorId);
+          if (creditor) {
+            updatedPlayers = updatePlayerInState(updatedPlayers, addProperty(creditor, propId));
+          }
+        } else {
+          updatedTiles[tileIdx] = { ...cleanTile, ownerId: null, isMortgaged: false } as typeof tile;
         }
       }
     }
 
+    const creditedName = creditorId
+      ? updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'
+      : '';
+    const eliminationMessage = `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${creditedName}.` : ''}`;
     const winner = hasPlayerWon({
       ...game,
       players: updatedPlayers,
@@ -1115,11 +1213,13 @@ export class MonopolyEngine implements GameEngine {
           ...game,
           players: updatedPlayers,
           tiles: updatedTiles,
+          housesRemaining: updatedHousesRemaining,
+          hotelsRemaining: updatedHotelsRemaining,
           winnerId: winner,
           status: 'completed',
           endedAt: Date.now(),
           logs: [...game.logs,
-            createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'}.` : ''}`, {}),
+            createLogEntry('eliminate', playerId, eliminationMessage, {}),
             createLogEntry('win', winner, `${updatedPlayers.find(p => p.id === winner)?.name ?? 'Player'} wins!`, {}),
           ],
         }
@@ -1127,10 +1227,12 @@ export class MonopolyEngine implements GameEngine {
           ...game,
           players: updatedPlayers,
           tiles: updatedTiles,
-          logs: [...game.logs, createLogEntry('eliminate', playerId, `${player.name} is bankrupt and eliminated!${creditorId ? ` Properties transferred to ${updatedPlayers.find(p => p.id === creditorId)?.name ?? 'creditor'}.` : ''}`, {})],
+          housesRemaining: updatedHousesRemaining,
+          hotelsRemaining: updatedHotelsRemaining,
+          logs: [...game.logs, createLogEntry('eliminate', playerId, eliminationMessage, {})],
         };
 
-    return this.getNextPlayer(result);
+    return winner ? result : this.getNextPlayer(result);
   }
 
   declareWinner(game: GameState): GameState {

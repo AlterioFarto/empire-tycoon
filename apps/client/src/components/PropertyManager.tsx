@@ -129,7 +129,7 @@ export function PropertyManager() {
 
         {ownedTiles.length === 0 && (
           <div className="text-gray-500 text-sm text-center py-8">
-            You don't own any properties yet.
+            You do not own any properties yet.
           </div>
         )}
       </div>
